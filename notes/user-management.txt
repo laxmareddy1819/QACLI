@@ -1,0 +1,277 @@
+Context
+The qabot UI currently operates as a single-user tool with zero authentication — all API routes are open, WebSocket broadcasts to all clients, and data stores have no user context. This feature adds local multi-user support with user accounts, role-based access control (admin/tester/viewer), and a comprehensive audit log — all without any cloud dependency.
+Why this matters: Teams sharing a qabot instance (e.g., on a shared dev server or via VPN) currently have no way to track who ran what, no way to restrict destructive operations to senior team members, and no accountability trail. This feature transforms qabot from a personal tool into a team-ready platform.
+
+Feature Scope & What's Included
+Core Features
+
+User Accounts — Local accounts with username/password, display name, active/disabled status
+Role-Based Access Control (RBAC) — Admin, Tester, Viewer roles with hierarchical permissions
+Audit Log — Every significant action tracked with user, timestamp, action type, resource, and details
+First-Time Setup Wizard — Guided creation of initial admin account on fresh installations
+Session Management — JWT-based token auth for both REST API and WebSocket connections
+User Management UI — Admin page to create/edit/disable users, reset passwords, manage sessions
+Audit Log UI — Filterable, paginated audit log viewer with export capability
+
+Additional Enhancements
+
+User Avatar in Header — Logged-in user with initial letter avatar + dropdown menu (profile, change password, logout)
+Role-Aware UI — Buttons/actions dynamically show/hide based on user role (viewers see read-only mode)
+Activity Attribution — Dashboard activity feed shows WHO performed each action
+RoleVisible Component — Reusable wrapper to conditionally render UI elements by role
+
+
+Architecture Decisions
+Zero New Dependencies
+All functionality built with Node.js built-ins + existing packages:
+
+Password hashing: node:crypto scryptSync (built-in, no bcrypt needed)
+JWT tokens: node:crypto HMAC-SHA256 (built-in, no jsonwebtoken needed)
+SQLite storage: better-sqlite3 (already a dependency)
+ID generation: generateId() (already exists in src/utils/)
+
+Storage Strategy
+
+Users + Sessions → SQLite (~/.qabot/users.db) — needs indexed lookups, atomic operations, concurrent access
+Audit Log → SQLite (~/.qabot/audit.db) — needs efficient querying, filtering, pagination, rotation
+JWT Secret → File (~/.qabot/auth-secret.key) — 64-byte random hex, generated once
+
+Existing Data Remains Shared
+Test results, cloud config, chat history, API collections — all remain global/shared (not user-scoped). Teams share one project workspace; the audit log tracks WHO did what.
+
+Role Permission Matrix
+Resource / ActionAdminTesterViewerDashboard, Results, Test Explorer (view)YesYesYesFile viewer (read)YesYesYesGit status/log/blame (read)YesYesYesSchedules, CI/CD, Settings (view)YesYesYesRunner (start/cancel tests)YesYesNoFiles (create/update/delete)YesYesNoAI (generate/fix/chat)YesYesNoBrowser (interact), RecorderYesYesNoAPI Testing (send requests)YesYesNoGit (commit/push/pull)YesYesNoCI/CD (generate/save configs)YesYesNoSettings (modify cloud/config)YesNoNoSchedules (create/update/delete)YesNoNoUser Management (CRUD users)YesNoNoAudit Log (view)YesNoNo
+
+Implementation Plan
+Phase 1: Backend Auth Infrastructure (4 new files)
+File: src/ui/auth/token-manager.ts
+
+JWT signing/verification using node:crypto HMAC-SHA256
+Generates + persists signing secret at ~/.qabot/auth-secret.key
+Token payload: { sub, jti, role, username, iat, exp } (24h expiry default)
+sign(payload) and verify(token) methods
+
+File: src/ui/store/user-store.ts
+
+SQLite database at ~/.qabot/users.db
+Tables: users (id, username UNIQUE COLLATE NOCASE, display_name, password_hash, role, is_active, timestamps) + sessions (id/jti, user_id, expires_at, revoked)
+Password hashing: scryptSync with random 16-byte salt, format salt:hash
+Methods: CRUD users, create/revoke sessions, hasAnyUsers(), verifyPassword(), getAdminCount()
+Following existing GitCacheStore / HealingStore SQLite patterns
+
+File: src/ui/auth/permissions.ts
+
+Role hierarchy: admin(3) > tester(2) > viewer(1)
+hasPermission(userRole, requiredRole) helper
+Route permission map: maps HTTP method + path pattern to minimum role
+Declarative config approach — not scattered across route files
+
+File: src/ui/auth/auth-middleware.ts
+
+AuthenticatedRequest interface extending Express Request with user property
+Core middleware: extracts Bearer token, verifies JWT, checks session not revoked, attaches req.user
+Public paths whitelist: /api/auth/login, /api/auth/setup, /api/auth/status
+Non-API paths (static files) pass through — SPA handles auth client-side
+Setup mode: when hasAnyUsers() === false, API routes return { setupRequired: true }
+Role enforcement using the permission map from permissions.ts
+
+Phase 2: Auth API Routes (1 new file)
+File: src/ui/routes/api-auth.ts
+Public endpoints (no auth):
+
+GET /api/auth/status — { setupRequired, authenticated, user? }
+POST /api/auth/setup — Create first admin (only when zero users)
+POST /api/auth/login — Authenticate, return JWT token + user info
+
+Authenticated endpoints:
+
+POST /api/auth/logout — Revoke current session
+POST /api/auth/change-password — Change own password
+GET /api/auth/me — Get current user profile
+
+Admin-only endpoints:
+
+GET /api/auth/users — List all users
+POST /api/auth/users — Create new user
+PUT /api/auth/users/:id — Update user (displayName, role, isActive)
+DELETE /api/auth/users/:id — Deactivate user (soft delete)
+POST /api/auth/users/:id/reset-password — Admin reset password
+POST /api/auth/users/:id/revoke-sessions — Force logout a user
+
+Edge cases: last-admin protection (cannot delete/demote the only active admin), password min 6 chars.
+Phase 3: Audit Log Backend (2 new files)
+File: src/ui/store/audit-log-store.ts
+
+SQLite at ~/.qabot/audit.db, indexed on timestamp, user_id, action, resource
+Action categories: auth.*, user.*, run.*, file.*, settings.*, ai.*, git.*
+log(entry) — synchronous write, non-blocking, silent on failure
+query(filter) — paginated with filters (userId, action prefix, resourceType, date range)
+prune(olderThanDays=90) — runs on startup + every 24h interval
+
+File: src/ui/routes/api-audit.ts
+
+GET /api/audit — Query with filters (admin only)
+GET /api/audit/export — Download full log as JSON
+GET /api/audit/stats — Summary (actions per user, login counts)
+
+Phase 4: Server Integration (modify existing)
+File: src/ui/server.ts
+
+Import and instantiate UserStore, AuditLogStore, TokenManager
+Insert auth middleware after CORS, before route mounts (~line 101)
+Add Authorization to CORS allowed headers
+Mount new api-auth and api-audit routes
+Update WebSocket connection handler: extract token from ?token= query param
+Pass auditLogStore + userStore to route mount functions
+Add session pruning interval (every hour)
+Add audit log pruning interval (every 24h)
+
+Phase 5: Frontend Auth (5 new files + 1 modified)
+File: ui-app/src/hooks/useAuth.ts (new)
+
+AuthContext + AuthProvider — wraps entire app
+Token in localStorage key qabot_token
+On mount: /api/auth/status to detect setup mode vs authenticated
+Exposes: user, token, isAuthenticated, isSetupRequired, isLoading, login(), logout(), setup(), hasRole()
+
+File: ui-app/src/api/client.ts (modify)
+
+Inject Authorization: Bearer <token> header in request<T>()
+Handle 401 → clear token, redirect to /login
+Handle { setupRequired: true } → redirect to /setup
+Add auth/user/audit API client functions
+
+File: ui-app/src/components/auth/LoginPage.tsx (new)
+
+Centered card with Q logo, username/password, login button, error display
+Redirects to /setup if needed, / after login
+
+File: ui-app/src/components/auth/SetupPage.tsx (new)
+
+First-run wizard: username, display name, password, confirm password
+Creates initial admin, auto-logs-in, redirects to dashboard
+
+File: ui-app/src/components/auth/AuthGuard.tsx (new)
+
+AuthGuard — route wrapper redirecting unauthenticated to /login
+RoleGuard — shows "Access Denied" if user lacks required role
+RoleVisible — inline conditional render by role
+
+Phase 6: App Shell & Navigation Updates (4 modified files)
+File: ui-app/src/App.tsx
+
+Wrap with AuthProvider inside QueryClientProvider
+Public routes: /login, /setup (outside AppShell)
+Protected routes wrapped with <AuthGuard>
+Admin routes: /users, /audit wrapped with <RoleGuard minRole="admin">
+
+File: ui-app/src/components/layout/Header.tsx
+
+User avatar (initial letter circle) + username on right side
+Dropdown menu: Change Password, Logout
+
+File: ui-app/src/components/layout/DynamicSidebar.tsx
+
+"Admin" section (below Tools) with Users and Audit Log links — admin only
+Import Users, ScrollText icons from lucide-react
+
+File: ui-app/src/hooks/useWebSocket.ts
+
+Include token in WebSocket URL: /ws?token=<token>
+On 4001 close code: clear token, redirect to login
+
+Phase 7: Admin Pages (2 new files)
+File: ui-app/src/components/admin/UserManagementPage.tsx
+
+Users table: Username, Display Name, Role badge, Status, Last Login, Actions
+Actions: Edit (modal), Reset Password (modal), Enable/Disable, Delete (ConfirmDialog)
+"Add User" button → creation modal (username, display name, password, role selector)
+Last-admin protection in UI
+
+File: ui-app/src/components/admin/AuditLogPage.tsx
+
+Filterable table: date range, user dropdown, action type
+Columns: Timestamp, User, Action, Resource, Details (expandable)
+Color-coded action icons (green=read, blue=write, red=destructive, yellow=auth)
+Server-side pagination + Export JSON button
+
+Phase 8: Audit Integration (modify ~8 existing route files)
+Add auditLogStore.log() calls to mutating endpoints in:
+
+api-runner.ts — run.start, run.cancel
+api-files.ts — file.create, file.update, file.delete
+api-cloud.ts — settings.cloud_save/delete, schedule_create/delete
+api-git.ts — git.commit, git.push, git.pull
+api-ai.ts — ai.generate, ai.fix, ai.chat
+api-recorder.ts — recorder.start, recorder.stop
+api-cicd.ts — cicd.generate
+api-upload.ts — file.upload
+
+Pattern: Extract req.user, call auditLogStore.log() after successful op. Non-blocking.
+Phase 9: Build & Verify
+
+pnpm build — backend TypeScript compilation
+pnpm run build:ui — frontend Vite build
+
+
+Files Summary
+New Files (13)
+#FilePurpose1src/ui/auth/token-manager.tsJWT sign/verify with HMAC-SHA2562src/ui/store/user-store.tsUsers + sessions SQLite store3src/ui/auth/permissions.tsRole hierarchy + route permission map4src/ui/auth/auth-middleware.tsExpress auth middleware5src/ui/routes/api-auth.tsAuth + user management endpoints6src/ui/store/audit-log-store.tsAudit log SQLite store7src/ui/routes/api-audit.tsAudit log query endpoints8ui-app/src/hooks/useAuth.tsAuthContext + AuthProvider9ui-app/src/components/auth/LoginPage.tsxLogin page10ui-app/src/components/auth/SetupPage.tsxFirst-run setup wizard11ui-app/src/components/auth/AuthGuard.tsxAuthGuard + RoleGuard + RoleVisible12ui-app/src/components/admin/UserManagementPage.tsxUser management (admin)13ui-app/src/components/admin/AuditLogPage.tsxAudit log viewer (admin)
+Modified Files (12)
+#FileChanges1src/ui/server.tsAuth stores, middleware, WebSocket auth, route mounts2ui-app/src/api/client.tsAuth header, 401 handling, auth API functions3ui-app/src/App.tsxAuthProvider, public/protected routes4ui-app/src/components/layout/Header.tsxUser avatar + dropdown menu5ui-app/src/components/layout/DynamicSidebar.tsxAdmin section links6ui-app/src/hooks/useWebSocket.tsToken in WS URL7-148 existing route filesAudit log integration
+
+Data File Layout (After Implementation)
+~/.qabot/
+  auth-secret.key            # NEW — JWT signing secret
+  users.db                   # NEW — Users + sessions
+  audit.db                   # NEW — Audit log
+  test-results.json          # Existing (unchanged)
+  cloud-config.json          # Existing (unchanged)
+  activity.json              # Existing (unchanged)
+  chat-history.json          # Existing (unchanged)
+  healing.db                 # Existing (unchanged)
+  git-cache.db               # Existing (unchanged)
+  api-collections.json       # Existing (unchanged)
+
+Edge Cases Handled
+
+Last admin protection — Cannot delete/demote the only active admin (checked server-side)
+Session expiry — 401 response auto-clears token and redirects to login
+Concurrent sessions — Allowed; admin can force-revoke all sessions for a user
+First-run migration — Existing installations see setup wizard; all existing data preserved
+WebSocket auth — Token passed as query param; invalid token gets 4001 close code
+Password reset — Admin-only; no email (local tool)
+Upload auth — uploadFiles() uses raw fetch, needs Authorization header added separately
+
+
+Verification Plan
+
+Fresh install: No users.db → setup wizard → create admin → auto-login → dashboard
+Login/logout: Logout → login page → wrong password → error → correct → dashboard
+Tester role: Login as tester → can run tests, edit files → cannot access Settings modifications, Users, Audit
+Viewer role: Login as viewer → can see dashboards/results → cannot start runs, edit files, commit
+Last admin: Try to delete/demote only admin → rejected with error
+Session expiry: Expire session in DB → next API call → 401 → redirect to login
+WebSocket: No token → rejected (4001) → with token → receives broadcasts
+Audit log: Login, run tests, edit file, git commit → audit page shows all with correct user
+Concurrent sessions: Two browsers → both work → admin force-revokes → both redirect to login
+Build: pnpm build && pnpm run build:ui — both pass
+
+=================================
+
+Feature 4.5: Team Workspace — Multi-User Local ✅
+Backend auth system — JWT tokens, password hashing, role-based permissions (admin/tester/viewer), all with zero new dependencies
+User & session management — SQLite stores, CRUD APIs, session tracking
+Audit logging — Full action tracking across all 8 route files (runner, files, git, cloud, AI, recorder, CI/CD, uploads)
+Frontend auth flow — Login page, setup wizard, AuthGuard/RoleGuard, WebSocket auth
+Admin pages — User management + audit log viewer (admin-only)
+Server integration — Auth middleware, CORS headers, cleanup intervals
+User Profile Page ✅
+Profile overview — Avatar, editable display name, role badge, join/login dates
+Change password — Full form with validation and show/hide toggles
+Active sessions — Browser/OS detection, revoke individual or all others
+Recent activity — Color-coded audit entries for the current user
+Preferences — Theme toggle + future placeholders
+Header dropdown updated: "Change Password" → "Profile" navigating to /profile
+Login Error Fix ✅
+Fixed hardcoded "Session expired" message → now shows the actual backend error like "Invalid username or password"

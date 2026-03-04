@@ -1,0 +1,432 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --surface-0: #121316;
+  --surface-1: #1a1b20;
+  --surface-2: #22232a;
+  --surface-3: #2c2d36;
+  color-scheme: dark;
+}
+
+html.light {
+  --surface-0: #f0f2f7;
+  --surface-1: #ffffff;
+  --surface-2: #f0f1f5;
+  --surface-3: #e4e5ec;
+  color-scheme: light;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(117, 117, 117, 0.3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(117, 117, 117, 0.5); }
+
+/* Selection */
+::selection { background: rgba(117, 117, 117, 0.3); }
+
+/* Transitions */
+* { transition-property: background-color, border-color, color, opacity;
+    transition-duration: 150ms;
+    transition-timing-function: ease-out; }
+
+/* Split pane resizer */
+.split-resizer {
+  @apply w-1 bg-transparent hover:bg-brand-500/40 cursor-col-resize transition-colors;
+}
+
+/* Tree node */
+.tree-node:hover { @apply bg-white/5; }
+.tree-node.selected { @apply bg-brand-500/15 text-brand-300; }
+
+/* Glow effect — disabled for flat B&W theme */
+.glow { box-shadow: none; }
+
+/* Monaco editor: symbol navigation highlight flash */
+.symbol-highlight-line {
+  background-color: rgba(189, 189, 189, 0.15) !important;
+  animation: symbol-flash 1.5s ease-out forwards;
+}
+@keyframes symbol-flash {
+  0% { background-color: rgba(189, 189, 189, 0.25); }
+  100% { background-color: transparent; }
+}
+html.light .symbol-highlight-line {
+  background-color: rgba(82, 82, 82, 0.12) !important;
+}
+@keyframes symbol-flash-light {
+  0% { background-color: rgba(82, 82, 82, 0.20); }
+  100% { background-color: transparent; }
+}
+html.light .symbol-highlight-line {
+  animation: symbol-flash-light 1.5s ease-out forwards;
+}
+
+/* Panel slide-in animation for collapsible outline/steps */
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIGHT THEME OVERRIDES
+   Remaps dark-mode Tailwind utility classes for light backgrounds.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Base body text ─────────────────────────────────────────────────────── */
+html.light { color: #1f2937; }
+
+/* ── Text color inversions ──────────────────────────────────────────────── */
+html.light .text-gray-100 { color: #111827; }
+html.light .text-gray-200 { color: #1f2937; }
+html.light .text-gray-300 { color: #374151; }
+html.light .text-gray-400 { color: #4b5563; }
+html.light .text-gray-500 { color: #6b7280; }
+html.light .text-gray-600 { color: #6b7280; }
+
+/* ── Hover text variants ────────────────────────────────────────────────── */
+html.light .hover\:text-gray-100:hover { color: #111827; }
+html.light .hover\:text-gray-200:hover { color: #1f2937; }
+html.light .hover\:text-gray-300:hover { color: #374151; }
+html.light .hover\:text-gray-400:hover { color: #4b5563; }
+html.light .hover\:text-gray-500:hover { color: #6b7280; }
+
+/* ── Borders — white-based → black-based ────────────────────────────────── */
+html.light .border-white\/5  { border-color: rgba(0, 0, 0, 0.06); }
+html.light .border-white\/10 { border-color: rgba(0, 0, 0, 0.10); }
+html.light .border-white\/20 { border-color: rgba(0, 0, 0, 0.15); }
+html.light .divide-white\/5 > :not(:first-child) { border-color: rgba(0, 0, 0, 0.06); }
+html.light .divide-white\/10 > :not(:first-child) { border-color: rgba(0, 0, 0, 0.10); }
+html.light .hover\:border-white\/10:hover { border-color: rgba(0, 0, 0, 0.10); }
+html.light .hover\:border-white\/20:hover { border-color: rgba(0, 0, 0, 0.15); }
+html.light .focus\:border-brand-500\/50:focus { border-color: rgba(82, 82, 82, 0.5); }
+
+/* ── Background overlays — white-based → black-based ───────────────────── */
+html.light .bg-white\/5       { background-color: rgba(0, 0, 0, 0.03); }
+html.light .bg-white\/10      { background-color: rgba(0, 0, 0, 0.05); }
+html.light .bg-white\/\[0\.02\] { background-color: rgba(0, 0, 0, 0.02); }
+html.light .hover\:bg-white\/5:hover  { background-color: rgba(0, 0, 0, 0.04); }
+html.light .hover\:bg-white\/10:hover { background-color: rgba(0, 0, 0, 0.06); }
+html.light .hover\:bg-white\/\[0\.02\]:hover { background-color: rgba(0, 0, 0, 0.03); }
+
+/* Dark overlays — reduce intensity on light bg */
+html.light .bg-black\/20 { background-color: rgba(0, 0, 0, 0.08); }
+html.light .bg-black\/40 { background-color: rgba(0, 0, 0, 0.12); }
+html.light .bg-black\/50 { background-color: rgba(0, 0, 0, 0.15); }
+html.light .bg-black\/60 { background-color: rgba(0, 0, 0, 0.20); }
+
+/* ── Accent text — pastel → saturated for light bg ─────────────────────── */
+html.light .text-brand-200  { color: #424242; }
+html.light .text-brand-300  { color: #333333; }
+html.light .text-brand-400  { color: #424242; }
+
+html.light .text-emerald-200 { color: #047857; }
+html.light .text-emerald-300 { color: #059669; }
+html.light .text-emerald-400 { color: #059669; }
+
+html.light .text-red-200  { color: #b91c1c; }
+html.light .text-red-300  { color: #dc2626; }
+html.light .text-red-400  { color: #dc2626; }
+
+html.light .text-amber-200 { color: #b45309; }
+html.light .text-amber-300 { color: #d97706; }
+html.light .text-amber-400 { color: #d97706; }
+
+html.light .text-sky-200  { color: #0369a1; }
+html.light .text-sky-300  { color: #0284c7; }
+html.light .text-sky-400  { color: #0284c7; }
+
+html.light .text-purple-200 { color: #6d28d9; }
+html.light .text-purple-300 { color: #7c3aed; }
+html.light .text-purple-400 { color: #7c3aed; }
+
+html.light .text-orange-200 { color: #c2410c; }
+html.light .text-orange-300 { color: #ea580c; }
+html.light .text-orange-400 { color: #ea580c; }
+
+html.light .text-pink-200 { color: #be185d; }
+html.light .text-pink-300 { color: #db2777; }
+html.light .text-pink-400 { color: #db2777; }
+
+html.light .text-teal-200 { color: #0f766e; }
+html.light .text-teal-300 { color: #0d9488; }
+html.light .text-teal-400 { color: #0d9488; }
+
+html.light .text-green-200 { color: #047857; }
+html.light .text-green-300 { color: #059669; }
+html.light .text-green-400 { color: #059669; }
+
+html.light .text-yellow-200 { color: #a16207; }
+html.light .text-yellow-300 { color: #ca8a04; }
+html.light .text-yellow-400 { color: #ca8a04; }
+
+html.light .text-blue-200 { color: #1d4ed8; }
+html.light .text-blue-300 { color: #2563eb; }
+html.light .text-blue-400 { color: #2563eb; }
+
+html.light .text-cyan-200 { color: #0e7490; }
+html.light .text-cyan-300 { color: #0891b2; }
+html.light .text-cyan-400 { color: #0891b2; }
+
+html.light .text-indigo-200 { color: #424242; }
+html.light .text-indigo-300 { color: #333333; }
+html.light .text-indigo-400 { color: #424242; }
+
+/* ── Badge backgrounds — slightly more opaque for light bg ─────────────── */
+html.light .bg-brand-500\/20   { background-color: rgba(117, 117, 117, 0.12); }
+html.light .bg-brand-500\/15   { background-color: rgba(117, 117, 117, 0.10); }
+html.light .bg-brand-500\/10   { background-color: rgba(117, 117, 117, 0.08); }
+html.light .bg-emerald-500\/20 { background-color: rgba(16, 185, 129, 0.12); }
+html.light .bg-emerald-500\/15 { background-color: rgba(16, 185, 129, 0.10); }
+html.light .bg-emerald-500\/10 { background-color: rgba(16, 185, 129, 0.08); }
+html.light .bg-red-500\/20     { background-color: rgba(239, 68, 68, 0.10); }
+html.light .bg-red-500\/15     { background-color: rgba(239, 68, 68, 0.08); }
+html.light .bg-red-500\/10     { background-color: rgba(239, 68, 68, 0.06); }
+html.light .bg-amber-500\/20   { background-color: rgba(245, 158, 11, 0.12); }
+html.light .bg-amber-500\/10   { background-color: rgba(245, 158, 11, 0.08); }
+html.light .bg-sky-500\/20     { background-color: rgba(14, 165, 233, 0.12); }
+html.light .bg-gray-500\/20    { background-color: rgba(107, 114, 128, 0.12); }
+html.light .bg-purple-500\/20  { background-color: rgba(139, 92, 246, 0.12); }
+html.light .bg-green-500\/20   { background-color: rgba(34, 197, 94, 0.12); }
+html.light .bg-green-500\/10   { background-color: rgba(34, 197, 94, 0.08); }
+html.light .bg-yellow-500\/20  { background-color: rgba(234, 179, 8, 0.12); }
+html.light .bg-orange-500\/20  { background-color: rgba(249, 115, 22, 0.12); }
+
+/* Hover accent backgrounds */
+html.light .hover\:bg-red-500\/10:hover { background-color: rgba(239, 68, 68, 0.08); }
+html.light .hover\:bg-red-500\/15:hover { background-color: rgba(239, 68, 68, 0.10); }
+html.light .hover\:bg-red-500\/20:hover { background-color: rgba(239, 68, 68, 0.12); }
+html.light .hover\:bg-green-500\/10:hover { background-color: rgba(34, 197, 94, 0.08); }
+html.light .hover\:bg-brand-500\/10:hover { background-color: rgba(117, 117, 117, 0.08); }
+html.light .hover\:bg-emerald-500\/10:hover { background-color: rgba(16, 185, 129, 0.08); }
+
+/* ── Ring colors (avatar rings, focus rings) ────────────────────────────── */
+html.light .ring-brand-500\/30   { --tw-ring-color: rgba(117, 117, 117, 0.20); }
+html.light .ring-emerald-500\/30 { --tw-ring-color: rgba(16, 185, 129, 0.20); }
+html.light .ring-gray-500\/30    { --tw-ring-color: rgba(107, 114, 128, 0.20); }
+
+/* ── Placeholder text ───────────────────────────────────────────────────── */
+html.light .placeholder-gray-600::placeholder { color: #9ca3af; }
+html.light .placeholder-gray-500::placeholder { color: #9ca3af; }
+
+/* ── Tree nodes (override @apply above) ─────────────────────────────────── */
+html.light .tree-node:hover { background-color: rgba(0, 0, 0, 0.04); }
+html.light .tree-node.selected { background-color: rgba(82, 82, 82, 0.10); color: #333333; }
+
+/* ── Scrollbar ──────────────────────────────────────────────────────────── */
+html.light ::-webkit-scrollbar-thumb { background: rgba(117, 117, 117, 0.20); }
+html.light ::-webkit-scrollbar-thumb:hover { background: rgba(117, 117, 117, 0.35); }
+
+/* ── Glow ────────────────────────────────────────────────────────────────── */
+html.light .glow { box-shadow: none; }
+
+/* ── Gradient text adjustments ──────────────────────────────────────────── */
+html.light .from-brand-400 { --tw-gradient-from: #525252; }
+html.light .to-brand-200 { --tw-gradient-to: #757575; }
+html.light .from-emerald-400 { --tw-gradient-from: #059669; }
+
+/* ── Selection ──────────────────────────────────────────────────────────── */
+html.light ::selection { background: rgba(82, 82, 82, 0.20); }
+
+/* ── Input/Select focus ring ─────────────────────────────────────────────── */
+html.light .focus\:ring-brand-500:focus { --tw-ring-color: rgba(82, 82, 82, 0.40); }
+html.light .focus\:ring-brand-500\/20:focus { --tw-ring-color: rgba(82, 82, 82, 0.25); }
+
+/* ── Shadow adjustments — flat B&W theme ────────────────────────────────── */
+html.light .shadow-xl { box-shadow: none; }
+html.light .shadow-2xl { box-shadow: none; }
+html.light .shadow-lg { box-shadow: none; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SUPER LIGHT THEME — Extended Overrides
+   Covers all remaining gaps for a modern, trendy, professional look.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Toast backgrounds — dark tinted → light tinted ──────────────────────── */
+html.light .bg-emerald-900\/90 { background-color: rgba(236, 253, 245, 0.95); }
+html.light .bg-red-900\/90     { background-color: rgba(254, 242, 242, 0.95); }
+
+/* ── Toast border colors ─────────────────────────────────────────────────── */
+html.light .border-emerald-700\/50 { border-color: rgba(5, 150, 105, 0.30); }
+html.light .border-red-700\/50     { border-color: rgba(220, 38, 38, 0.30); }
+
+/* ── White text opacity — invisible on light → dark equivalents ──────────── */
+html.light .text-white\/50 { color: rgba(55, 65, 81, 0.6); }
+html.light .text-white\/75 { color: rgba(55, 65, 81, 0.85); }
+html.light .hover\:text-white:hover { color: #1f2937; }
+
+/* ── Group-hover text ─────────────────────────────────────────────────────── */
+html.light .group:hover .group-hover\:text-gray-200 { color: #1f2937; }
+html.light .group:hover .group-hover\:text-gray-300 { color: #374151; }
+html.light .group:hover .group-hover\:opacity-100 { opacity: 1; }
+
+/* ── Modal backdrop — increase opacity for proper scrim ──────────────────── */
+html.light .bg-black\/50 { background-color: rgba(0, 0, 0, 0.30); }
+html.light .bg-black\/60 { background-color: rgba(0, 0, 0, 0.40); }
+html.light .bg-black\/80 { background-color: rgba(0, 0, 0, 0.50); }
+
+/* ── Code block backgrounds — distinct light gray ────────────────────────── */
+html.light .bg-black\/10 { background-color: rgba(0, 0, 0, 0.04); }
+html.light .bg-black\/20 { background-color: rgba(0, 0, 0, 0.05); }
+html.light .bg-black\/30 { background-color: #f4f5f8; }
+html.light .bg-black\/40 { background-color: #eef0f4; }
+
+/* ── Missing badge/status backgrounds ────────────────────────────────────── */
+html.light .bg-brand-500\/5    { background-color: rgba(117, 117, 117, 0.05); }
+html.light .bg-emerald-500\/5  { background-color: rgba(16, 185, 129, 0.05); }
+html.light .bg-red-500\/5      { background-color: rgba(239, 68, 68, 0.05); }
+html.light .bg-amber-500\/5    { background-color: rgba(245, 158, 11, 0.05); }
+html.light .bg-sky-500\/5      { background-color: rgba(14, 165, 233, 0.05); }
+html.light .bg-orange-500\/5   { background-color: rgba(249, 115, 22, 0.05); }
+html.light .bg-purple-500\/5   { background-color: rgba(139, 92, 246, 0.05); }
+html.light .bg-amber-500\/15   { background-color: rgba(245, 158, 11, 0.10); }
+html.light .bg-sky-500\/15     { background-color: rgba(14, 165, 233, 0.10); }
+html.light .bg-sky-500\/10     { background-color: rgba(14, 165, 233, 0.08); }
+html.light .bg-sky-500\/20     { background-color: rgba(14, 165, 233, 0.12); }
+html.light .bg-blue-500\/15    { background-color: rgba(59, 130, 246, 0.10); }
+html.light .bg-blue-500\/10    { background-color: rgba(59, 130, 246, 0.08); }
+html.light .bg-slate-500\/15   { background-color: rgba(100, 116, 139, 0.10); }
+html.light .bg-purple-500\/15  { background-color: rgba(139, 92, 246, 0.10); }
+html.light .bg-purple-500\/10  { background-color: rgba(139, 92, 246, 0.08); }
+html.light .bg-purple-500\/20  { background-color: rgba(139, 92, 246, 0.12); }
+html.light .bg-orange-500\/10  { background-color: rgba(249, 115, 22, 0.08); }
+html.light .bg-orange-500\/15  { background-color: rgba(249, 115, 22, 0.10); }
+html.light .bg-red-500\/15     { background-color: rgba(239, 68, 68, 0.10); }
+
+/* ── Missing hover backgrounds ───────────────────────────────────────────── */
+html.light .hover\:bg-amber-500\/10:hover   { background-color: rgba(245, 158, 11, 0.08); }
+html.light .hover\:bg-amber-500\/15:hover   { background-color: rgba(245, 158, 11, 0.10); }
+html.light .hover\:bg-emerald-500\/15:hover { background-color: rgba(16, 185, 129, 0.10); }
+html.light .hover\:bg-emerald-500\/20:hover { background-color: rgba(16, 185, 129, 0.12); }
+html.light .hover\:bg-emerald-500\/25:hover { background-color: rgba(16, 185, 129, 0.15); }
+html.light .hover\:bg-emerald-500\/30:hover { background-color: rgba(16, 185, 129, 0.18); }
+html.light .hover\:bg-sky-500\/10:hover     { background-color: rgba(14, 165, 233, 0.08); }
+html.light .hover\:bg-sky-500\/20:hover     { background-color: rgba(14, 165, 233, 0.12); }
+html.light .hover\:bg-sky-500\/30:hover     { background-color: rgba(14, 165, 233, 0.18); }
+html.light .hover\:bg-brand-500\/15:hover   { background-color: rgba(117, 117, 117, 0.10); }
+html.light .hover\:bg-brand-500\/20:hover   { background-color: rgba(117, 117, 117, 0.12); }
+html.light .hover\:bg-brand-500\/25:hover   { background-color: rgba(117, 117, 117, 0.15); }
+html.light .hover\:bg-brand-500\/30:hover   { background-color: rgba(117, 117, 117, 0.18); }
+html.light .hover\:bg-purple-500\/20:hover  { background-color: rgba(139, 92, 246, 0.12); }
+html.light .hover\:bg-purple-500\/25:hover  { background-color: rgba(139, 92, 246, 0.15); }
+html.light .hover\:bg-purple-500\/30:hover  { background-color: rgba(139, 92, 246, 0.18); }
+html.light .hover\:bg-red-500\/15:hover     { background-color: rgba(239, 68, 68, 0.10); }
+html.light .hover\:bg-red-500\/25:hover     { background-color: rgba(239, 68, 68, 0.15); }
+html.light .hover\:bg-red-500\/30:hover     { background-color: rgba(239, 68, 68, 0.18); }
+html.light .hover\:bg-blue-500\/25:hover    { background-color: rgba(59, 130, 246, 0.15); }
+html.light .hover\:bg-orange-500\/10:hover  { background-color: rgba(249, 115, 22, 0.08); }
+html.light .hover\:bg-orange-500\/15:hover  { background-color: rgba(249, 115, 22, 0.10); }
+
+/* ── Missing accent border colors ────────────────────────────────────────── */
+html.light .border-brand-500    { border-color: #757575; }
+html.light .border-brand-500\/20 { border-color: rgba(117, 117, 117, 0.20); }
+html.light .border-brand-500\/30 { border-color: rgba(117, 117, 117, 0.30); }
+html.light .border-brand-500\/50 { border-color: rgba(117, 117, 117, 0.50); }
+html.light .border-emerald-500\/20 { border-color: rgba(5, 150, 105, 0.20); }
+html.light .border-emerald-500\/30 { border-color: rgba(5, 150, 105, 0.30); }
+html.light .border-red-500\/20    { border-color: rgba(220, 38, 38, 0.20); }
+html.light .border-red-500\/30    { border-color: rgba(220, 38, 38, 0.30); }
+html.light .border-amber-500\/20  { border-color: rgba(217, 119, 6, 0.20); }
+html.light .border-amber-500\/30  { border-color: rgba(217, 119, 6, 0.30); }
+html.light .border-sky-500\/20    { border-color: rgba(2, 132, 199, 0.20); }
+html.light .border-sky-500\/30    { border-color: rgba(2, 132, 199, 0.30); }
+html.light .border-purple-500\/20 { border-color: rgba(139, 92, 246, 0.20); }
+html.light .border-purple-500\/30 { border-color: rgba(139, 92, 246, 0.30); }
+html.light .border-orange-500\/20 { border-color: rgba(234, 88, 12, 0.20); }
+html.light .border-blue-500\/20   { border-color: rgba(37, 99, 235, 0.20); }
+html.light .border-gray-500\/20   { border-color: rgba(107, 114, 128, 0.20); }
+html.light .hover\:border-brand-500\/30:hover { border-color: rgba(117, 117, 117, 0.30); }
+
+/* ── Missing ring colors ─────────────────────────────────────────────────── */
+html.light .ring-brand-500\/20   { --tw-ring-color: rgba(117, 117, 117, 0.15); }
+html.light .ring-red-500\/20     { --tw-ring-color: rgba(239, 68, 68, 0.15); }
+html.light .ring-red-500\/30     { --tw-ring-color: rgba(239, 68, 68, 0.20); }
+html.light .ring-emerald-500\/20 { --tw-ring-color: rgba(16, 185, 129, 0.15); }
+html.light .ring-amber-500\/30   { --tw-ring-color: rgba(245, 158, 11, 0.20); }
+
+/* ── Shadows — sm and md — flat B&W theme ─────────────────────────────── */
+html.light .shadow-sm { box-shadow: none; }
+html.light .shadow-md { box-shadow: none; }
+
+/* ── Gray backgrounds (progress bars, system icons) ──────────────────────── */
+html.light .bg-gray-700     { background-color: #d1d5db; }
+html.light .bg-gray-700\/50 { background-color: rgba(209, 213, 219, 0.5); }
+html.light .bg-gray-800     { background-color: #e5e7eb; }
+html.light .bg-gray-900     { background-color: #f3f4f6; }
+
+/* ── Accent text — missing variants ──────────────────────────────────────── */
+html.light .text-slate-300 { color: #475569; }
+html.light .text-slate-400 { color: #64748b; }
+html.light .text-blue-400  { color: #2563eb; }
+html.light .text-blue-300  { color: #2563eb; }
+
+/* ── Gradient overrides ──────────────────────────────────────────────────── */
+html.light .from-purple-600\/20   { --tw-gradient-from: rgba(139, 92, 246, 0.12); }
+html.light .to-brand-600\/20      { --tw-gradient-to: rgba(82, 82, 82, 0.12); }
+html.light .from-emerald-600\/20  { --tw-gradient-from: rgba(5, 150, 105, 0.12); }
+html.light .to-sky-600\/20        { --tw-gradient-to: rgba(2, 132, 199, 0.12); }
+html.light .hover\:from-purple-600\/30:hover  { --tw-gradient-from: rgba(139, 92, 246, 0.18); }
+html.light .hover\:to-brand-600\/30:hover     { --tw-gradient-to: rgba(82, 82, 82, 0.18); }
+html.light .hover\:from-emerald-600\/30:hover { --tw-gradient-from: rgba(5, 150, 105, 0.18); }
+html.light .hover\:to-sky-600\/30:hover       { --tw-gradient-to: rgba(2, 132, 199, 0.18); }
+
+/* ── Modern enhancements — sidebar gradient ──────────────────────────────── */
+html.light aside.bg-surface-1 {
+  background: linear-gradient(180deg, #f7f7f7 0%, #ffffff 100%);
+  border-right-color: rgba(0, 0, 0, 0.06);
+}
+
+/* ── Modern enhancements — card elevation shadow (disabled for flat theme) ── */
+html.light .bg-surface-1.rounded-xl {
+  box-shadow: none;
+}
+
+/* ── Modern enhancements — dropdown/menu (disabled for flat theme) ────────── */
+html.light .bg-surface-1.shadow-xl {
+  box-shadow: none;
+}
+
+/* ── Divide color families ───────────────────────────────────────────────── */
+html.light .divide-white\/20 > :not(:first-child) { border-color: rgba(0, 0, 0, 0.12); }
+html.light .divide-gray-700 > :not(:first-child)  { border-color: rgba(0, 0, 0, 0.08); }
+html.light .divide-gray-800 > :not(:first-child)  { border-color: rgba(0, 0, 0, 0.06); }
+
+/* ── Border white arbitrary ──────────────────────────────────────────────── */
+html.light .border-white\/\[0\.03\] { border-color: rgba(0, 0, 0, 0.03); }
+
+/* ── Hover surface helpers ───────────────────────────────────────────────── */
+html.light .hover\:bg-surface-1:hover { background-color: var(--surface-1); }
+html.light .hover\:bg-surface-3:hover { background-color: var(--surface-3); }
+
+/* ── Surface opacity variants — white-tinted for visible step items ──────── */
+html.light .bg-surface-2\/50 { background-color: rgba(255, 255, 255, 0.80); }
+html.light .bg-surface-2\/30 { background-color: rgba(255, 255, 255, 0.60); }
+
+/* ── Toggle switch off-state ─────────────────────────────────────────────── */
+html.light .bg-gray-600 { background-color: #d1d5db; }
+
+/* ── Cancelled/neutral status dots & badges ──────────────────────────────── */
+html.light .bg-gray-500     { background-color: #9ca3af; }
+html.light .bg-gray-500\/15 { background-color: rgba(107, 114, 128, 0.10); }
+
+/* ── Form controls — white bg with crisp border in light theme ───────────── */
+html.light input.bg-surface-2,
+html.light textarea.bg-surface-2,
+html.light select.bg-surface-2 {
+  background-color: #ffffff;
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+/* Hover/focus transitions (inline-edit fields like request name) */
+html.light input.hover\:bg-surface-2:hover,
+html.light input.focus\:bg-surface-2:focus {
+  background-color: #f8f9fb;
+}
+
+/* ── AI chat bubbles — neutral in light theme ────────────────────────────── */
+html.light .chat-ai-bubble {
+  background-color: #f5f5f5;
+  border-color: rgba(0, 0, 0, 0.04);
+}

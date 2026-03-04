@@ -1,0 +1,600 @@
+Context
+This guide covers step-by-step testing of the entire Universal Auto-Healing feature (Feature 5) across all 3 phases:
+
+Phase 1: Core healing engine, 6-strategy chain, 3 adapters, HTTP bridge, HealingStore, CLI tools
+Phase 2: AI Healer, DOM Analyzer, 3 more adapters (Cypress/WDIO/C#), enhanced React dashboard
+Phase 3: Settings UI, Fingerprint Browser, Event Detail Panel, WebSocket real-time updates, error handling
+
+
+Prerequisites
+bash# 1. Build everything
+pnpm run build:ui && pnpm build
+
+# 2. Start the qabot UI server (port 3700)
+node bin/qabot.js /buildUI
+
+# 3. Open browser
+# Navigate to http://localhost:3700
+```
+
+> **Note**: The healing SQLite database is stored at `~/.qabot/healing.db`. If you want a clean test, delete this file before starting.
+
+---
+
+## Part 1: CLI Testing
+
+### Test 1.1 — `/heal` Command (No Subcommand)
+```
+# In the qabot REPL:
+/heal
+```
+**Expected**: Shows healing status summary — fingerprint count, event stats, success rate. If no data exists yet, shows zeros.
+
+### Test 1.2 — `/heal status`
+```
+/heal status
+```
+**Expected**: Formatted table showing:
+- Fingerprints stored count
+- Healing events (total / healed / failed)
+- Success rate %
+- Avg confidence, avg duration
+- Strategy breakdown (if events exist)
+- Framework breakdown (if events exist)
+- List of injected projects (if any)
+
+### Test 1.3 — `/heal adapters`
+```
+/heal adapters
+Expected: Lists all 6 supported adapter combinations:
+
+Playwright — TypeScript/JavaScript
+Selenium — Java
+Selenium — Python
+Cypress — TypeScript
+WebdriverIO — TypeScript
+Selenium — C#
+
+Test 1.4 — /heal inject (Auto-detect Framework)
+bash# Create a dummy Playwright project to test injection:
+mkdir /tmp/test-heal-project
+cd /tmp/test-heal-project
+npm init -y
+npm install @playwright/test
+```
+```
+# In qabot REPL:
+/heal inject /tmp/test-heal-project
+```
+**Expected**:
+- Auto-detects Playwright + TypeScript
+- Creates 2 files:
+  - `tests/helpers/healing-client.ts`
+  - `tests/fixtures/healing.ts`
+- Shows integration instructions (import the fixture, use `test()` instead of default)
+- Shows configuration (server URL, confidence threshold, AI enabled)
+
+### Test 1.5 — Verify Injection was Recorded
+```
+/heal status
+```
+**Expected**: Shows the injected project in the list with:
+- Path: `/tmp/test-heal-project`
+- Framework: `playwright`
+- Language: `typescript`
+- Status: `active`
+
+### Test 1.6 — `/heal report`
+```
+/heal report 7
+/heal report 30
+/heal report 90
+```
+**Expected**: Each shows analytics for the specified time window (likely empty/zero if fresh database).
+
+### Test 1.7 — `/heal remove`
+```
+/heal remove /tmp/test-heal-project
+Expected: Marks the injection as removed. /heal status should reflect the change.
+
+Part 2: API Testing (HTTP Bridge)
+These test the healing API endpoints that external test frameworks call. Use curl from a terminal while qabot UI server is running on port 3700.
+Test 2.1 — Store a Fingerprint (Baseline)
+bashcurl -s -X POST http://localhost:3700/api/heal/fingerprint \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:#login-button",
+    "url": "https://example.com/login",
+    "fingerprint": {
+      "tagName": "button",
+      "id": "login-button",
+      "testId": "login-btn",
+      "className": "btn btn-primary",
+      "ariaLabel": "Sign In",
+      "textContent": "Sign In",
+      "type": "submit"
+    },
+    "framework": "playwright"
+  }' | jq .
+Expected: { "id": "...", "stored": true }
+Test 2.2 — Store Additional Fingerprints
+bash# Store a second fingerprint
+curl -s -X POST http://localhost:3700/api/heal/fingerprint \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:#search-input",
+    "url": "https://example.com/search",
+    "fingerprint": {
+      "tagName": "input",
+      "id": "search-input",
+      "testId": "search-box",
+      "className": "form-control search-field",
+      "ariaLabel": "Search",
+      "placeholder": "Search products...",
+      "type": "text",
+      "name": "q"
+    },
+    "framework": "playwright"
+  }' | jq .
+
+# Store a third fingerprint (Selenium framework)
+curl -s -X POST http://localhost:3700/api/heal/fingerprint \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:.nav-menu .dropdown",
+    "url": "https://example.com/dashboard",
+    "fingerprint": {
+      "tagName": "div",
+      "className": "nav-menu dropdown active",
+      "ariaLabel": "Navigation Menu",
+      "textContent": "Settings"
+    },
+    "framework": "selenium"
+  }' | jq .
+Test 2.3 — Resolve a Broken Selector (Main Healing Endpoint)
+bashcurl -s -X POST http://localhost:3700/api/heal/resolve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selector": "#login-btn-old",
+    "selectorStrategy": "css",
+    "fingerprint": {
+      "tagName": "button",
+      "id": "login-btn-old",
+      "testId": "login-btn",
+      "className": "btn btn-primary updated",
+      "ariaLabel": "Sign In",
+      "textContent": "Sign In",
+      "type": "submit"
+    },
+    "pageUrl": "https://example.com/login",
+    "framework": "playwright",
+    "language": "typescript"
+  }' | jq .
+Expected: Returns healed selector with confidence score:
+json{
+  "healed": true,
+  "selector": "[data-testid=\"login-btn\"]",
+  "selectorStrategy": "css",
+  "confidence": 0.90,
+  "strategy": "fingerprint",
+  "durationMs": ...,
+  "aiUsed": false,
+  "candidates": [...]
+}
+Test 2.4 — Resolve Without Stored Fingerprint (Should Fail)
+bashcurl -s -X POST http://localhost:3700/api/heal/resolve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selector": "#unknown-element",
+    "pageUrl": "https://example.com/unknown",
+    "framework": "cypress"
+  }' | jq .
+Expected: { "healed": false, ... } — no stored fingerprint to match against.
+Test 2.5 — Report Healing Outcome
+bashcurl -s -X POST http://localhost:3700/api/heal/report \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:#login-btn-old",
+    "url": "https://example.com/login",
+    "healed": true,
+    "strategy": "fingerprint",
+    "confidence": 0.90,
+    "framework": "playwright",
+    "language": "typescript",
+    "originalSelector": "#login-btn-old",
+    "healedSelector": "[data-testid=\"login-btn\"]",
+    "durationMs": 45
+  }' | jq .
+Expected: { "id": "...", "recorded": true }
+Test 2.6 — Report a Failed Healing
+bashcurl -s -X POST http://localhost:3700/api/heal/report \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:.dynamic-widget",
+    "url": "https://example.com/dashboard",
+    "healed": false,
+    "framework": "selenium",
+    "language": "java",
+    "originalSelector": ".dynamic-widget",
+    "durationMs": 250
+  }' | jq .
+Test 2.7 — Query Analytics
+bashcurl -s http://localhost:3700/api/heal/analytics?days=30 | jq .
+Expected: Full analytics object with:
+
+totalEvents ≥ 2 (from resolve + report calls above)
+totalHealed, totalFailed counts
+overallSuccessRate percentage
+strategyBreakdown array
+frameworkBreakdown array (playwright + selenium)
+timeline array (daily breakdown)
+topFailures array
+
+Test 2.8 — Query Events with Filters
+bash# All events
+curl -s "http://localhost:3700/api/heal/events?days=30" | jq .
+
+# Filter by framework
+curl -s "http://localhost:3700/api/heal/events?framework=playwright&days=30" | jq .
+
+# Filter by success
+curl -s "http://localhost:3700/api/heal/events?success=true&days=30" | jq .
+
+# With pagination
+curl -s "http://localhost:3700/api/heal/events?limit=5&offset=0" | jq .
+Expected: Returns { events: [...], total: N } with appropriate filtering.
+Test 2.9 — List Adapters
+bashcurl -s http://localhost:3700/api/heal/adapters | jq .
+Expected:
+json{
+  "adapters": [
+    { "framework": "playwright", "language": "typescript", "displayName": "Playwright (TypeScript/JavaScript)" },
+    { "framework": "selenium",   "language": "java",       "displayName": "Selenium (Java)" },
+    { "framework": "selenium",   "language": "python",     "displayName": "Selenium (Python)" },
+    { "framework": "cypress",    "language": "typescript",  "displayName": "Cypress (TypeScript)" },
+    { "framework": "webdriverio","language": "typescript",  "displayName": "WebdriverIO (TypeScript)" },
+    { "framework": "selenium",   "language": "csharp",     "displayName": "Selenium (C#/.NET)" }
+  ]
+}
+Test 2.10 — Fingerprint CRUD
+bash# List all fingerprints
+curl -s "http://localhost:3700/api/healing/fingerprints" | jq .
+
+# Search fingerprints
+curl -s "http://localhost:3700/api/healing/fingerprints?search=login" | jq .
+
+# Paginate
+curl -s "http://localhost:3700/api/healing/fingerprints?limit=10&offset=0" | jq .
+
+# Delete a fingerprint (use an ID from the list above)
+curl -s -X DELETE "http://localhost:3700/api/healing/fingerprints/<ID>" | jq .
+Test 2.11 — Healing Config API
+bash# Read config
+curl -s http://localhost:3700/api/healing/config | jq .
+
+# Expected: { "enabled": true, "confidenceThreshold": 0.7, "aiEnabled": true, "retentionDays": 90 }
+
+# Update config
+curl -s -X PUT http://localhost:3700/api/healing/config \
+  -H "Content-Type: application/json" \
+  -d '{ "confidenceThreshold": 0.8, "aiEnabled": false }' | jq .
+
+# Verify update
+curl -s http://localhost:3700/api/healing/config | jq .
+Test 2.12 — Healing Stats
+bashcurl -s http://localhost:3700/api/healing/stats | jq .
+Expected: { "total": N, "successCount": N, "failureCount": N, "successRate": N, "available": true }
+
+Part 3: UI Testing
+Open http://localhost:3700 in your browser. If auth is configured, log in first.
+Test 3.1 — Main Dashboard → HealingCard
+
+Navigate to / (Dashboard)
+Verify: A "Self-Healing" card appears in the bottom section
+Verify: Shows "Elements tracked" count and "Success rate" percentage
+Verify: Card is clickable — clicking navigates to /healing
+Note: If no healing data exists, the card may be hidden (returns null when available: false)
+
+Test 3.2 — Healing Dashboard → Overview Tab
+
+Navigate to /healing (click "Healing" in the sidebar or the dashboard card)
+Verify: Page title "Self-Healing Dashboard" with Heart icon
+Verify: Day filter dropdown (7 / 30 / 90 days) in top-right corner
+Verify: 6 overview stat cards at the top:
+
+Total Events (blue Activity icon)
+Success Rate (color-coded: green ≥80%, amber ≥50%, red <50%)
+Avg Confidence (brand-colored)
+Avg Duration (cyan Clock icon)
+AI Usage % (violet Sparkles icon)
+Active Projects (pink FolderOpen icon)
+
+
+Verify: 5 tabs visible: Overview | Events | Fingerprints | Projects | Adapters
+Verify: Overview tab shows (when data exists):
+
+Healing Trend chart (stacked area: green healed / red failed + purple success % line)
+Strategy Breakdown bar chart (color-coded per strategy)
+Framework Breakdown horizontal bar chart
+Top Failures table (selector, URL, failure count, last seen)
+
+
+Test day filter: Change from 30 → 7 days → verify data updates
+Test empty state: With no data, charts show "No healing data yet" messages
+
+Test 3.3 — Healing Dashboard → Events Tab
+
+Click "Events" tab
+Verify: Search bar, Framework dropdown, Result dropdown (All/Healed/Failed), event count
+Verify: Table columns: Status | Selector | Healed To | Strategy | Framework | Confidence | Duration | Time
+Verify: Status icons: green ✓ for healed, red ✗ for failed
+Verify: AI-powered events show purple Sparkles icon next to strategy
+Verify: Confidence is color-coded (green ≥0.8, amber ≥0.5, red <0.5)
+Test search: Type a selector name → table filters in real-time
+Test framework filter: Select "playwright" → only Playwright events shown
+Test result filter: Select "Healed" → only successful heals shown
+Test pagination: If >25 events, verify prev/next buttons and "Showing X–Y of Z" text
+
+Test 3.4 — Events Tab → Detail Panel
+
+On the Events tab, click any event row
+Verify: A 380px side panel opens on the right
+Verify: Panel shows:
+
+Header with Healed/Failed badge + AI badge (if applicable) + X close button
+Selector Change: Original selector (red box) → arrow → Healed selector (green box)
+Strategy: Name + human-readable description of how the strategy works
+Confidence: Large % number + High/Medium/Low label + progress bar
+Details grid: URL, Framework, Language, Duration, Timestamp
+
+
+Verify: Selected row is highlighted in the table (left blue border)
+Click another row: Panel updates to show new event details
+Click X button: Panel closes, row highlight removed
+
+Test 3.5 — Healing Dashboard → Fingerprints Tab
+
+Click "Fingerprints" tab
+Verify: Search bar at top
+Verify: Table columns: Selector Key | URL | Success | Failures | Updated | Delete
+Verify: Fingerprints stored via API (Test 2.1–2.2) are visible
+Test search: Type "login" → filters to matching fingerprints
+Test delete:
+
+Click trash icon on a fingerprint row
+Verify: Confirmation appears ("Confirm" / "Cancel")
+Click "Cancel" → nothing happens
+Click trash again → click "Confirm" → fingerprint is deleted
+Verify: Fingerprint disappears from list
+
+
+Test pagination: If >25 fingerprints, verify page controls work
+Test empty state: If all deleted, shows "No fingerprints found" with Fingerprint icon
+
+Test 3.6 — Healing Dashboard → Projects Tab
+
+Click "Projects" tab
+Verify: Shows cards for injected projects (from /heal inject or API)
+Each card should show:
+
+Project name (last folder segment) + full path
+Status badge (active = green, disabled = amber, removed = red)
+Framework + Language in grid
+Confidence threshold + AI enabled/disabled
+Generated files list (up to 4 shown, "+N more" if more)
+Healing server URL at bottom
+Injection timestamp
+
+
+Test remove:
+
+Click "Remove" button on a project card
+Verify: Toast notification appears ("Injection removed successfully")
+Card updates to show "removed" status
+
+
+Test empty state: With no injections, shows "No injected projects" with instructions to use /heal inject
+
+Test 3.7 — Healing Dashboard → Adapters Tab
+
+Click "Adapters" tab
+Verify: Introductory text about adapters
+Verify: 6 adapter cards in a 3-column grid:
+
+Playwright (TypeScript/JavaScript) — rose/pink
+Selenium (Java) — amber/yellow
+Selenium (Python) — amber/yellow
+Cypress (TypeScript) — cyan
+WebdriverIO (TypeScript) — violet
+Selenium (C#/.NET) — amber/yellow
+
+
+Each card shows: Display name, Framework tag, Language tag, Puzzle icon
+
+Test 3.8 — Settings Page → Healing Section
+
+Navigate to /settings
+Verify: "Self-Healing" settings card exists between "Appearance" and "Cloud Grid Providers"
+Verify: Heart icon (pink) in section header
+Verify: Controls present:
+
+☑ "Enable self-healing" checkbox (default: checked)
+Confidence Threshold slider (0.10 – 1.00, default: 0.70)
+☑ "Enable AI-powered healing" checkbox (default: checked)
+Data Retention dropdown (30 / 60 / 90 / 180 days, default: 90)
+
+
+Test slider: Drag confidence threshold → value label updates in real-time
+Test save:
+
+Change confidence to 0.85
+Uncheck AI healing
+Change retention to 60 days
+Click "Save Healing Settings"
+Verify: Success toast appears
+Refresh page → settings persist (still 0.85, AI off, 60 days)
+
+
+Verify via API: curl http://localhost:3700/api/healing/config shows updated values
+
+
+Part 4: WebSocket Real-Time Testing
+Test 4.1 — Real-Time Event Updates
+
+Open /healing → Events tab in the browser
+Note the current event count
+In a terminal, trigger a healing resolve:
+
+bashcurl -s -X POST http://localhost:3700/api/heal/resolve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selector": "#realtime-test-btn",
+    "fingerprint": {
+      "tagName": "button",
+      "testId": "realtime-btn",
+      "textContent": "Click Me"
+    },
+    "pageUrl": "https://example.com/realtime",
+    "framework": "cypress",
+    "language": "typescript"
+  }'
+
+Verify: The Events table updates automatically (no page refresh needed)
+Verify: Overview cards update (Total Events count increases)
+Verify: If on Overview tab, trend chart data refreshes
+
+Test 4.2 — Real-Time Analytics Update
+
+Open /healing → Overview tab
+Run several resolve + report curl commands with different frameworks
+Verify: Strategy breakdown chart updates
+Verify: Framework breakdown shows new frameworks
+Verify: Timeline chart reflects new data points
+
+
+Part 5: Error Handling Testing
+Test 5.1 — Network Error States
+
+Navigate to /healing
+Stop the qabot server (Ctrl+C in the terminal)
+Wait 30 seconds (for React Query auto-refetch to fire)
+Verify: All 8 healing components show red error cards:
+
+"Failed to load healing overview" (HealingOverviewCards)
+"Failed to load trend data" (HealingTrendChart)
+"Failed to load strategy data" (StrategyBreakdownChart)
+"Failed to load framework data" (FrameworkBreakdownChart)
+"Failed to load failure data" (TopFailuresTable)
+"Failed to load events" (HealingEventsTable)
+"Failed to load projects" (InjectedProjectsPanel)
+"Failed to load adapters" (AdaptersList)
+
+
+Each error card should show: AlertCircle icon + error message + technical detail text
+Restart the server → components auto-recover on next refetch cycle
+
+Test 5.2 — Fingerprint Browser Error State
+
+Navigate to /healing → Fingerprints tab
+Stop the server
+Verify: Red error card: "Failed to load fingerprints"
+Restart server → data reappears
+
+Test 5.3 — InjectedProjectsPanel Toast on Error
+
+Navigate to /healing → Projects tab
+Click "Remove" on a project
+If server is down → Verify: Error toast appears ("Remove failed: ...")
+
+
+Part 6: End-to-End Integration Test
+This is the full realistic workflow: inject healing → build baselines → break selectors → verify auto-heal.
+Step 1: Create a Test Project
+bashmkdir /tmp/e2e-heal-test && cd /tmp/e2e-heal-test
+npm init -y
+npm install @playwright/test
+npx playwright install chromium
+Create a simple test file tests/demo.spec.ts:
+typescriptimport { test, expect } from '@playwright/test';
+
+test('demo test', async ({ page }) => {
+  await page.goto('https://example.com');
+  const heading = page.locator('h1');
+  await expect(heading).toBeVisible();
+});
+```
+
+### Step 2: Inject Healing via CLI
+```
+# In qabot REPL:
+/heal inject /tmp/e2e-heal-test
+Verify: Two files created under tests/helpers/ and tests/fixtures/
+Step 3: Verify in UI
+
+Go to http://localhost:3700/healing → Projects tab
+Verify: /tmp/e2e-heal-test appears as active injection
+
+Step 4: Store Baselines via API
+bash# Simulate what the injected code does on a passing test:
+curl -s -X POST http://localhost:3700/api/heal/fingerprint \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:h1",
+    "url": "https://example.com",
+    "fingerprint": {
+      "tagName": "h1",
+      "textContent": "Example Domain",
+      "className": ""
+    },
+    "framework": "playwright"
+  }'
+Step 5: Simulate a Broken Selector
+bashcurl -s -X POST http://localhost:3700/api/heal/resolve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selector": "h1.old-heading",
+    "pageUrl": "https://example.com",
+    "framework": "playwright",
+    "language": "typescript",
+    "fingerprint": {
+      "tagName": "h1",
+      "textContent": "Example Domain"
+    }
+  }' | jq .
+Verify: Returns healed selector (e.g., using text match strategy)
+Step 6: Report Success
+bashcurl -s -X POST http://localhost:3700/api/heal/report \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:h1.old-heading",
+    "url": "https://example.com",
+    "healed": true,
+    "strategy": "textMatch",
+    "confidence": 0.75,
+    "framework": "playwright",
+    "originalSelector": "h1.old-heading",
+    "healedSelector": "text=Example Domain",
+    "durationMs": 30
+  }'
+```
+
+### Step 7: Verify Full Flow in UI
+1. **Dashboard** (`/`): HealingCard shows updated stats
+2. **Healing** → **Overview**: Trend chart shows today's heal, strategy breakdown shows textMatch
+3. **Healing** → **Events**: New event row visible with strategy "textMatch"
+4. **Click event row**: Detail panel shows selector change `h1.old-heading` → `text=Example Domain`
+5. **Healing** → **Fingerprints**: `css:h1` fingerprint shows `successCount: 1`
+6. **Settings** → **Self-Healing**: Config values match what you set
+
+### Step 8: Clean Up
+```
+# In qabot REPL:
+/heal remove /tmp/e2e-heal-test
+bashrm -rf /tmp/e2e-heal-test
+
+Quick Reference: All API Endpoints
+MethodPathPurposePOST/api/heal/resolveMain healing — receive broken selector, return healedPOST/api/heal/fingerprintStore element baseline fingerprintPOST/api/heal/reportReport healing success/failureGET/api/heal/eventsQuery healing event logGET/api/heal/analyticsRich analytics (charts, breakdowns)GET/api/heal/injectionsList injected projectsPOST/api/heal/injectRecord injection metadataDELETE/api/heal/injections/:idRemove injectionGET/api/heal/adaptersList supported adaptersGET/api/healing/statsBasic healing statsGET/api/healing/fingerprintsBrowse/search stored fingerprintsDELETE/api/healing/fingerprints/:idDelete a fingerprintGET/api/healing/configRead healing configurationPUT/api/healing/configUpdate healing configurationGET/api/healing/by-urlFingerprints for a specific URL
+Quick Reference: All UI Routes
+RoutePageWhat to Test/DashboardHealingCard in bottom section/healingHealing Dashboard5 tabs: Overview, Events, Fingerprints, Projects, Adapters/settingsSettingsSelf-Healing section with config controls
+Quick Reference: CLI Commands
+CommandWhat it Does/healShow healing status (alias for /heal status)/heal statusDetailed status with stats/heal inject [path]Inject healing into test project/heal report [days]Generate analytics report/heal remove <path>Remove healing from project/heal adaptersList supported frameworks

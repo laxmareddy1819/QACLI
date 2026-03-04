@@ -1,0 +1,172 @@
+Context
+Phase 1 is complete: 6-strategy healing chain, 3 adapters (Playwright TS, Selenium Java, Selenium Python), HTTP healing bridge API (9 endpoints), HealingStore v2 (3 SQLite tables), heal_project + heal_status tools, /heal CLI command. Phase 2 adds the AI-powered healing fallback, DOM analysis, 3 more framework adapters, and a comprehensive healing dashboard in the React UI.
+
+Implementation Order
+Step 1: DOM Analyzer (no dependencies — build first)
+New file: src/healing/dom-analyzer.ts
+
+DOMAnalyzer class with three capabilities:
+
+extractContext(domSnapshot, fingerprint, scope) — extracts relevant HTML section around the element's expected position for LLM context scoping. section mode caps at ~2KB, minimal ~500 bytes, full ~8KB
+validateSelector(domSnapshot, selector) — lightweight regex-based check if selector's target attributes exist in the HTML, returns {valid, matchCount, stabilityScore}
+scoreStability(selector) — ranks selectors: [data-testid=...]=1.0, #id=0.9, [aria-label=...]=0.8, [name=...]=0.7, .class=0.5, tagName=0.3
+rankCandidates(domSnapshot, candidates) — sorts candidates by combined validity + stability
+
+
+
+Modify: src/healing/index.ts — add DOMAnalyzer export
+
+Step 2: AI Healer (depends on Step 1)
+New file: src/healing/ai-healer.ts
+
+AIHealer class using getRouter() from src/llm/index.js for one-shot router.complete() calls
+heal(originalSelector, fingerprint, domSnapshot?, snapshotScope?) → AIHealResult | null
+System prompt: expert at fixing broken CSS selectors, respond with JSON {selector, confidence, reasoning}
+Uses DOMAnalyzer.extractContext() to scope DOM context before sending to LLM
+Temperature: 0.2, maxTokens: 256 — deterministic, fast
+Graceful fallback: dynamic import() of router, try/catch everywhere, returns null on any failure
+parseResponse() handles clean JSON, markdown-wrapped JSON, and malformed responses
+
+Modify: src/healing/healer.ts
+
+Add 'aiHealing' to strategies array (already in array from Phase 1, just need the implementation)
+Add case 'aiHealing' in tryStrategy() switch → calls tryAIHealing()
+tryAIHealing() method: dynamic import of AIHealer, call heal(), validate confidence ≥ threshold
+The existing healFromSnapshot() also gets AI fallback: after deterministic candidates, if none good enough, try AI healer
+
+Modify: src/ui/routes/api-healing-universal.ts
+
+In POST /api/heal/resolve: after deterministic candidate generation fails, try AI healer as fallback
+Accept optional domSnapshot field in request body (already in schema)
+Set aiUsed: true in healing event when AI healer succeeds
+Return reasoning field from AI healer in response
+
+Modify: src/healing/index.ts — add AIHealer export
+
+Step 3: New Adapters (parallel with Step 2)
+All follow existing adapter pattern from src/healing/adapters/base.ts: implement HealingAdapter interface with generate(config): Record<string, string> and getIntegrationInstructions(config): string.
+3a. Cypress TypeScript — src/healing/adapters/cypress-ts.ts
+Generated files:
+
+cypress/support/healing-config.ts — Configuration constants
+cypress/support/healing-client.ts — HTTP client (Node-side, called via cy.task())
+cypress/support/healing-commands.ts — Cypress.Commands.overwrite('get', ...) for auto-healing
+cypress/plugins/healing-plugin.ts — on('task', { healSelector, storeFingerprint }) Node event handler
+
+Pattern: cy.get() override → on failure → cy.task('healSelector') → Node plugin makes HTTP call to /api/heal/resolve → retry with healed selector. Uses cy.task() bridge because Cypress commands run in browser but HTTP calls need Node process.
+3b. WebdriverIO TypeScript — src/healing/adapters/webdriverio-ts.ts
+Generated files:
+
+test/helpers/healing-config.ts — Configuration
+test/helpers/healing-client.ts — HTTP client
+test/helpers/healing-service.ts — WDIO Service plugin class
+
+Pattern: WDIO Service with beforeCommand/afterCommand hooks → intercept $ and $$ commands → on failure call healing API → retry. User adds to wdio.conf.ts: services: [[HealingService, {}]]
+3c. Selenium C# / NUnit — src/healing/adapters/selenium-csharp.ts
+Generated files (5):
+
+Healing/HealingConfig.cs — Static configuration
+Healing/HealingClient.cs — System.Net.Http.HttpClient wrapper
+Healing/ElementFingerprinter.cs — JS execution via IJavaScriptExecutor
+Healing/HealingWebDriver.cs — IWebDriver proxy (catches NoSuchElementException, calls healing API)
+Healing/HealingSetup.cs — NUnit [SetUpFixture] for global setup
+
+Pattern: identical to Java adapter — HealingWebDriver wraps IWebDriver, overrides FindElement(By).
+Modify: src/healing/adapters/index.ts — import and register all 3 new adapters in the array (auto-discovered by UI + API)
+
+Step 4: API Client + Hooks (frontend foundation)
+Modify: ui-app/src/api/client.ts — add after existing healing section (line 169):
+typescript// Universal Healing API
+getHealingAnalytics(days = 30) → GET /api/heal/analytics?days=N
+getHealingEvents(filters?) → GET /api/heal/events?framework=&days=&success=&limit=
+getHealingInjections(status?) → GET /api/heal/injections?status=
+getHealingAdapters() → GET /api/heal/adapters
+removeHealingInjection(id) → DELETE /api/heal/injections/:id
+Modify: ui-app/src/hooks/useHealing.ts — expand from 1 hook to 6:
+typescriptuseHealingStats()       // existing
+useHealingAnalytics(days)  // new — refetchInterval: 30s
+useHealingEvents(filters)  // new — refetchInterval: 15s
+useHealingInjections()     // new — refetchInterval: 30s
+useHealingAdapters()       // new — staleTime: 5min
+useRemoveInjection()       // new — useMutation + invalidate
+
+Step 5: Enhanced Healing Dashboard (depends on Step 4)
+Modify: ui-app/src/App.tsx — add route:
+tsx<Route path="healing" element={<HealingDashboard />} />
+Modify: ui-app/src/components/layout/DynamicSidebar.tsx — add healing link after Results (line 67):
+tsximport { Heart } from 'lucide-react';
+<SidebarLink to="/healing" icon={<Heart size={18} />} label="Healing" collapsed={collapsed} />
+```
+
+**Rewrite: `ui-app/src/components/healing/HealingDashboard.tsx`** — full 4-tab layout:
+- Header with title + days filter dropdown (7/30/90 days)
+- 6 stat cards (HealingOverviewCards)
+- Tab bar: Overview | Events | Projects | Adapters
+- Tab content switches between sub-components
+
+**New files in `ui-app/src/components/healing/`:**
+
+| File | Component | Data Source |
+|------|-----------|-------------|
+| `HealingOverviewCards.tsx` | 6 stat cards: Total Events, Success Rate, Avg Confidence, Avg Duration, AI Usage, Active Projects | `useHealingAnalytics` + `useHealingInjections` |
+| `HealingOverviewTab.tsx` | Composes trend chart + strategy chart + framework chart + top failures | layout wrapper |
+| `HealingTrendChart.tsx` | Recharts ComposedChart: stacked area (healed/failed) + line (success rate) | `analytics.timeline` |
+| `StrategyBreakdownChart.tsx` | Recharts BarChart: per-strategy count + success rate | `analytics.strategyBreakdown` |
+| `FrameworkBreakdownChart.tsx` | Recharts horizontal BarChart: per-framework stats | `analytics.frameworkBreakdown` |
+| `TopFailuresTable.tsx` | Table: selector, URL, failure count, last seen | `analytics.topFailures` |
+| `HealingEventsTable.tsx` | Sortable/filterable table with search, framework dropdown, success/fail filter | `useHealingEvents` |
+| `InjectedProjectsPanel.tsx` | Project cards with status, framework, files, disable/remove actions | `useHealingInjections` + `useRemoveInjection` |
+| `AdaptersList.tsx` | Reference cards for available adapters (framework, language, display name) | `useHealingAdapters` |
+
+---
+
+### Step 6: Build & Verify
+```
+pnpm run build:ui   # Vite build → src/ui/static/
+pnpm build          # tsup build → dist/index.js
+
+File Inventory
+New Files (14)
+FileStepsrc/healing/dom-analyzer.ts1src/healing/ai-healer.ts2src/healing/adapters/cypress-ts.ts3asrc/healing/adapters/webdriverio-ts.ts3bsrc/healing/adapters/selenium-csharp.ts3cui-app/src/components/healing/HealingOverviewCards.tsx5ui-app/src/components/healing/HealingOverviewTab.tsx5ui-app/src/components/healing/HealingTrendChart.tsx5ui-app/src/components/healing/StrategyBreakdownChart.tsx5ui-app/src/components/healing/FrameworkBreakdownChart.tsx5ui-app/src/components/healing/TopFailuresTable.tsx5ui-app/src/components/healing/HealingEventsTable.tsx5ui-app/src/components/healing/InjectedProjectsPanel.tsx5ui-app/src/components/healing/AdaptersList.tsx5
+Modified Files (9)
+FileStepChangessrc/healing/index.ts1,2Add DOMAnalyzer + AIHealer exportssrc/healing/healer.ts2Add tryAIHealing() method, AI fallback in healFromSnapshot()src/ui/routes/api-healing-universal.ts2AI fallback in /api/heal/resolvesrc/healing/adapters/index.ts3Register 3 new adaptersui-app/src/api/client.ts4Add 5 API functionsui-app/src/hooks/useHealing.ts4Add 5 hooksui-app/src/components/healing/HealingDashboard.tsx5Complete rewrite with 4-tab layoutui-app/src/App.tsx5Add /healing routeui-app/src/components/layout/DynamicSidebar.tsx5Add Healing sidebar link
+
+Verification
+
+Build: pnpm run build:ui && pnpm build — no TypeScript errors
+Adapters: Verify all 6 adapters listed at GET /api/heal/adapters
+AI Healer: Test /api/heal/resolve with a known fingerprint and no deterministic candidates — verify AI fallback triggers (requires LLM configured)
+UI: Navigate to /healing — verify 6 stat cards render, 4 tabs work, charts render with mock/empty data, events table filters work, injection management works
+Sidebar: Verify Healing link appears between Results and API Testing
+CLI: /heal adapters shows all 6 adapters
+
+==============================================
+
+Feature 5 Phase 2 is now complete. Here's the full summary:
+
+Feature 5, Phase 2 — Complete
+AI Healer + New Adapters + Enhanced Dashboard
+Backend (Steps 1-3):
+
+DOM Analyzer (src/healing/dom-analyzer.ts) — context extraction, selector validation, stability scoring
+AI Healer (src/healing/ai-healer.ts) — LLM-powered fallback strategy using router.complete() with temperature 0.2
+Integrated AI Healer into healer.ts strategy chain and /api/heal/resolve endpoint
+3 new adapters: Cypress TS, WebdriverIO TS, Selenium C# (total: 6 adapters)
+Frontend (Steps 4-5):
+
+5 new API client functions + 6 React Query hooks
+10 dashboard components:
+HealingDashboard — 4-tab layout (Overview, Events, Projects, Adapters) with days filter
+HealingOverviewCards — 6 stat cards
+HealingTrendChart — stacked area chart + success rate line
+StrategyBreakdownChart — per-strategy bar chart
+FrameworkBreakdownChart — horizontal bar chart
+TopFailuresTable — most-failing selectors table
+HealingEventsTable — sortable/filterable events with search, framework & result filters
+InjectedProjectsPanel — project cards with remove action
+AdaptersList — available adapter reference cards
+HealingOverviewTab — composition layout
+/healing route added in App.tsx
+Heart icon sidebar link between Results and API Testing
+Build: UI (1.30 MB) + backend (1.10 MB) — both clean builds, no errors.
+

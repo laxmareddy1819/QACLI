@@ -1,0 +1,77 @@
+Changes Made
+1. RunOutput.tsx — Fixed ANSI chunk boundary issue
+The output was streaming raw WebSocket chunks directly as separate <div> elements. ANSI escape codes that spanned across chunk boundaries were being broken (e.g., \x1b[ in one chunk, 32m in the next). Now the component combines all chunks into proper newline-separated lines before ANSI parsing, so colors render correctly.
+
+2. playwright-parser.ts — Fixed artifact directory matching
+Playwright truncates long directory names. Your test should display product price was stored in a dir like productDetails-Flipkart-Pr-01208-hould-display-product-price-firefox — note the s from should is cut off. The old matcher looked for the full slug should-display-product-price which fails. New matcher also tries matching the last 3 words of the slug (e.g., display-product-price) with browser verification to avoid false matches.
+
+3. ScreenshotViewer + TestDetailPanel (from earlier)
+Screenshots and videos now serve through /api/results/artifact (binary endpoint)
+Video player modal, inline failure screenshot preview, copy-error button, trace viewer link
+⚠️ Critical Steps You Need To Do
+Step 1: Restart the qabot server
+The builds are done but the running qabot instance still serves the OLD code. You need to:
+
+/buildUI    (or restart qabot and run /buildUI again)
+
+Step 2: Hard-refresh the browser
+Press Ctrl+Shift+R in the browser to clear cache and load the new JS/CSS bundles.
+
+Step 3: Re-inject healing fixtures
+The error classification guard (that prevents healing from triggering on "intercepts pointer events") is in the template but your test project still has the OLD fixtures. Run:
+
+/heal inject
+
+This will regenerate the healing fixtures with the new guard that immediately throws for interception errors instead of wasting 30+ seconds trying all healing strategies.
+
+Step 4: Run tests from the Web UI Runner
+To see results on the Results page, tests MUST be run through the web UI runner (not the REPL). The runner:
+
+Injects --reporter=list,json + PLAYWRIGHT_JSON_OUTPUT_NAME env var
+Parses the JSON output file after completion
+Stores results with error messages, screenshots, videos, and traces
+All visible on the /results page with the enhanced detail panel
+
+=======================================================================
+
+How Reporter Injection Works (It IS Automatic)
+When you run tests from the Web UI Runner (the /runner page), the backend automatically:
+
+Detects framework from your command (e.g., npx playwright test → playwright)
+Appends --reporter=list,json to your command
+Sets PLAYWRIGHT_JSON_OUTPUT_NAME env var to redirect JSON output to a file
+After test completion → Reads .qabot-results.json → Parses tests, errors, artifacts → Stores results
+Results appear on the /results page
+You DON'T need to add anything yourself — just type your command (e.g., npx playwright test) in the Runner input box and click Run.
+
+Why You Might Not Be Seeing Results
+The most common reasons:
+
+1. Running from the wrong place
+If you're running tests from:
+
+The qabot REPL (/run npx playwright test) → ❌ No injection, no parsing
+Your terminal directly (npx playwright test) → ❌ No injection, no parsing
+The Web UI Runner page → ✅ Automatic injection + parsing
+2. Server not restarted
+After the build, you need to restart qabot and run /buildUI again to load the new code.
+
+3. Browser cache
+Hard-refresh with Ctrl+Shift+R to get the new frontend.
+
+New Diagnostic Logging
+I've added [qabot-runner] and [qabot-parser] log lines to the server console (the terminal where qabot runs). When you run from the web UI, you'll now see:
+
+[qabot-runner] Framework detected: playwright (from command: yes)
+[qabot-runner] Reporter injected: --reporter=list,json
+[qabot-runner] PLAYWRIGHT_JSON_OUTPUT_NAME → D:\...\PlaywrightSpecs\.qabot-results.json
+[qabot-parser] Reading Playwright JSON: D:\...\PlaywrightSpecs\.qabot-results.json
+[qabot-parser] Parsed: 1 top-level suites
+[qabot-parser] Extracted 3 tests from JSON report
+[qabot-runner] Results: 3 tests (2 passed, 1 failed, 0 skipped)
+[qabot-runner] Artifacts: 1 screenshots, 1 videos, 1 traces, 1 errors
+
+If you see No Playwright JSON report found! instead, that tells us exactly where the problem is.
+
+Try running from the Web UI Runner now, then check both the qabot terminal logs and the /results page. Let me know what the logs show!
+

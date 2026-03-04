@@ -1,0 +1,248 @@
+Interactive Browser View in AI Assistant — Analysis & Research
+The Vision
+When any AI feature launches a browser (New Test, Browser Tab, Recorder, Fix), a live interactive browser view appears within the AI Assistant tab. Users can watch the AI work in real-time, take over manually, and interact directly — even when qabot is deployed on a remote server.
+
+Current State
+Component	Status
+Browser launches via Playwright (headless/headed)	Exists
+Screenshots sent as base64 PNG via WebSocket	Exists
+Multi-tab tracking (pages[], activePageIndex)	Exists
+Frame/iframe support (getInteractionTarget())	Exists
+WebSocket infrastructure (port 3700, auth, broadcast)	Exists
+CDP exposure to frontend	Does not exist
+Live frame streaming	Does not exist
+Frontend input forwarding to browser	Does not exist
+Technical Approach: CDP Screencast + Input Forwarding
+The most practical approach uses Playwright's CDP session to stream frames and forward user input — no VNC, no extra services.
+
+How It Works
+┌─────────────────────────────────────────────────────────────┐
+│  Frontend (React)                                           │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  <canvas> — renders screencast frames               │   │
+│  │  captures: mousedown, mouseup, mousemove,           │   │
+│  │            keydown, keyup, wheel, touch              │   │
+│  └───────────────────┬─────────────────────────────────┘   │
+│                      │ WebSocket                            │
+└──────────────────────┼──────────────────────────────────────┘
+                       │
+┌──────────────────────┼──────────────────────────────────────┐
+│  Backend (Node.js)   │                                      │
+│                      ▼                                      │
+│  ┌──────────────────────────┐   ┌────────────────────────┐ │
+│  │ WebSocket Handler        │   │ CDP Session            │ │
+│  │ - receive input events   │──▶│ - Input.dispatchMouse  │ │
+│  │ - send screencast frames │◀──│ - Input.dispatchKey    │ │
+│  │                          │   │ - Page.startScreencast │ │
+│  └──────────────────────────┘   └─────────┬──────────────┘ │
+│                                           │                 │
+│                                  ┌────────▼──────────┐      │
+│                                  │  Playwright        │      │
+│                                  │  Browser Instance  │      │
+│                                  └───────────────────┘      │
+└─────────────────────────────────────────────────────────────┘
+
+Key Technical Details
+CDP Screencast — Playwright (Chromium) exposes page.context().newCDPSession(page):
+
+Page.startScreencast({ format: 'jpeg', quality: 60, maxWidth, maxHeight }) — continuous frame stream
+Each frame is a JPEG buffer + metadata (offsetTop, pageScaleFactor, scrollOffset)
+Page.screencastFrameAck — acknowledge to get next frame (flow control)
+Frames arrive at ~10-30fps depending on activity (only sends on visual change)
+Input Forwarding — CDP's Input domain:
+
+Input.dispatchMouseEvent — type: mousePressed/mouseReleased/mouseMoved, x, y, button, clickCount
+Input.dispatchKeyEvent — type: keyDown/keyUp, key, code, text, modifiers
+Input.dispatchTouchEvent — for mobile emulation
+Mouse coordinates scaled from canvas size → actual viewport size
+No Additional Dependencies — works with existing Playwright + existing WebSocket server
+
+Feature Breakdown
+Phase 1 — Core Live View
+Feature	Description
+Live Screencast	Real-time JPEG frame streaming from browser to canvas
+Mouse Interaction	Click, double-click, right-click, drag forwarded to browser
+Keyboard Input	Type, shortcuts, special keys forwarded to browser
+Scroll Support	Mouse wheel → scroll events in browser
+Tab Bar	Show all open tabs, switch between them
+URL Bar	Display current URL, allow direct navigation
+Status Indicator	Show who's controlling — AI or User (dual-mode)
+
+Phase 2 — Enhanced Interaction
+Feature	Description
+Element Highlighter	Hover highlights elements with selector tooltip (like DevTools inspect)
+Viewport Controls	Resize, device presets (mobile/tablet/desktop)
+Network Panel	Side panel showing XHR/fetch requests in real-time
+Console Panel	Show browser console.log/error output
+Screenshot/Record	Capture screenshot or record video clip from live view
+Picture-in-Picture	Minimized floating view when switching to other tabs
+
+Phase 3 — AI Collaboration
+Feature	Description
+Watch Mode	Observe AI performing actions with visual action labels
+Take Over	Pause AI, interact manually, then resume AI
+Point & Instruct	Click an element → ask AI "click this", "fill this with..."
+Visual Assertion Builder	Select element → choose assertion type → generates test code
+Shared Cursor	Show AI's cursor movements alongside user's
+Action Replay	Scrub through past actions timeline synced with browser state
+
+UI Layout Options
+Option A — Split Panel (Recommended)
+
+┌──────────────────────────────────────────────────┐
+│ AI Assistant                                      │
+│ [New Test] [Review] [Browser] [Record] [Chat] ... │
+├────────────────────────┬─────────────────────────┤
+│                        │                          │
+│   Chat / Actions       │   Live Browser View      │
+│   Timeline             │   ┌──────────────────┐  │
+│                        │   │  Tab1 | Tab2      │  │
+│   > Navigate to...     │   ├──────────────────┤  │
+│   > Click "Login"      │   │ [https://...]     │  │
+│   > Type "admin"       │   ├──────────────────┤  │
+│   📷 screenshot        │   │                   │  │
+│                        │   │   Live Page        │  │
+│   [message input]      │   │   Rendering        │  │
+│                        │   │                   │  │
+│                        │   └──────────────────┘  │
+├────────────────────────┴─────────────────────────┤
+│  🟢 AI Control  |  👤 User Control  |  ⏸ Paused  │
+└──────────────────────────────────────────────────┘
+
+Option B — Overlay/Toggle
+
+Full-width chat by default
+Toggle button to show browser overlay/fullscreen
+Good for smaller screens
+Option C — Dedicated Browser Tab with AI Sidebar
+
+The "Browser" tab becomes primarily the live view
+Chat/actions in a collapsible sidebar
+Considerations & Tradeoffs
+Consideration	Detail
+Chromium only	CDP screencast requires Chromium. Firefox/WebKit would fall back to periodic screenshots
+Bandwidth	JPEG frames at ~10fps ≈ 500KB-2MB/s. Manageable on LAN; may need quality controls for remote
+Latency	~50-150ms round-trip for input → visual update. Acceptable for testing, not for gaming
+Headless works	Screencast works in headless mode — perfect for server deployments
+Security	Input forwarding means the UI has full browser control — auth required (already have JWT)
+Concurrent users	Multiple users watching same browser = broadcast frames to all. Control = need locking/turn-taking
+Self-healing integration	Live view could highlight healed elements with before/after overlay
+Recorder sync	During recording, live view shows exactly what's being recorded with action overlays
+Browser Compatibility Fallback
+Chromium  → CDP Screencast (real-time, interactive)
+Firefox   → Periodic screenshots every 500ms (view-only)
+WebKit    → Periodic screenshots every 500ms (view-only)
+
+What This Enables for Server Deployment
+When qabot is deployed on a remote server:
+
+No need for VNC/RDP — browser view is in the web UI itself
+No headed browser needed — headless works perfectly with screencast
+Multiple team members can watch the same test execution live
+CI/CD integration — trigger tests and watch them execute from any browser
+Mobile/tablet access — touch events forwarded, responsive canvas
+Implementation Effort Estimate
+Phase	Scope	Complexity
+Phase 1 (Core)	CDP session, frame streaming, canvas renderer, input forwarding, tab bar, URL bar	Medium-High
+Phase 2 (Enhanced)	Element inspector, viewport controls, network/console panels	Medium
+Phase 3 (AI Collab)	Watch/takeover mode, point & instruct, visual assertions	High
+This is a significant feature that would differentiate qabot from other test automation tools. The existing WebSocket infrastructure and Playwright CDP access make it feasible without external dependencies. Phase 1 alone would deliver the core "see and interact with the browser" experience. Want me to proceed with planning the implementation for any specific phase?
+
+=========================================
+
+What Phase 3 Adds & Why It Matters
+1. Watch Mode (Eye icon in live view toolbar)
+What it does: When the AI is executing browser actions, you see visual indicators on the canvas — purple click ripples, a pulsing AI cursor, and action labels ("Click #login-btn", "Type 'hello'", "Navigate → google.com").
+
+Why it's important:
+
+Debugging: You can see exactly where the AI clicked, typed, or hovered — if it clicks the wrong element, you see it instantly
+Learning: Watch the AI's strategy in real-time — how it finds elements, what selectors it uses
+Trust: Instead of a black box, you see every action as it happens
+2. Pause/Resume (Pause button in toolbar + chat)
+What it does: You can pause the AI mid-execution before it runs the next browser tool. Then resume when ready.
+
+Why it's important:
+
+Safety: Stop the AI before it does something destructive (like clicking "Delete All")
+Step-through debugging: Pause → inspect the page state → resume, like a debugger breakpoint
+Take-over: Pause the AI, manually interact with the browser (switch to User mode), fix something, then resume the AI
+3. Point & Instruct (Right-click on canvas in User mode)
+What it does: Right-click any element on the live browser canvas → context menu with options:
+
+Click — tells AI to click that element
+Type — tells AI to type into that element
+Inspect — asks AI to describe the element
+Find similar — asks AI to find all similar elements
+Add assertion — opens the assertion builder
+Ask AI — free-text instruction about that element
+Why it's important:
+
+No selector knowledge needed — just point at what you want and tell the AI what to do
+Natural interaction — instead of typing "click the button with class .submit-btn", just right-click it
+Context-aware — the AI gets the element's tag, id, class, and coordinates
+4. Visual Assertion Builder (via Point & Instruct → "Add assertion")
+What it does: Select an element → choose assertion type (visible, text contains, exists, enabled, etc.) → generates Playwright or Cypress code → copy to clipboard.
+
+Why it's important:
+
+Test creation without coding — point at elements, generate assertions
+Framework support — Playwright and Cypress syntax
+AI enhancement — "Generate Full Assertions with AI" creates comprehensive assertion sets
+How to Test
+Here's a step-by-step testing flow:
+
+Setup
+Run pnpm build:all (or the builds are already done)
+Start qabot: node bin/qabot.js
+Run /ui to open the dashboard
+Navigate to AI Assistant → Browser tab
+Test Watch Mode
+In the chat, type: "Launch chromium and go to google.com"
+Watch the live view canvas — you should see:
+Purple action labels appear at the top ("Navigate → google.com")
+A pulsing purple cursor when clicks happen
+Expanding ring ripples at click coordinates
+Toggle the Eye icon (👁) in the toolbar to disable/enable watch mode
+Test Pause/Resume
+In the chat, type: "Go to google.com, search for 'playwright testing', then click the first result"
+While the AI is working (you'll see tool events in the timeline), click "Pause AI" button (either in the live view toolbar or in the chat quick chips)
+You should see:
+A semi-transparent amber overlay on the canvas saying "AI Paused"
+The AI stops before executing the next tool
+Status bar shows "AI Paused" in amber
+Switch to User mode → manually interact with the browser if needed
+Click "Resume" → AI continues from where it paused
+Test Point & Instruct
+Make sure a browser is active and the live view is showing
+Switch to User mode (click "User" toggle in toolbar)
+Enable element highlight (crosshair icon) — hover over elements to see blue highlights
+Right-click on any element on the canvas
+A context menu appears with options — try:
+"Click <button>" → AI clicks that element
+"Inspect <div>" → AI describes the element
+"Ask AI about this..." → type a custom instruction
+Watch the instruction appear in the chat timeline with a 🎯 prefix
+Test Assertion Builder
+With browser active and element highlight enabled
+Right-click an element → select "Add assertion"
+The assertion builder panel opens (top-right of canvas):
+Shows the element selector and coordinates
+Toggle between Playwright and Cypress
+Click different assertion types (Visible, Text Contains, etc.)
+See generated code update in real-time
+Click the copy button to copy to clipboard
+Try "Generate Full Assertions with AI" for comprehensive assertions
+Combined Flow (Real-World Usage)
+This simulates how a QA engineer would use all features together:
+
+Launch browser → "Launch chromium and go to my-app.localhost:3000"
+Watch the AI navigate (watch mode shows actions)
+Pause when AI reaches the page you want to test
+Switch to User mode → right-click on key elements
+Add assertions for important elements via the assertion builder
+Point & Instruct → "Fill in the login form with test@example.com / password123"
+Resume AI to let it continue automated testing
+Copy generated assertion code into your test files
+This workflow lets you combine AI automation with manual precision — the AI handles navigation and repetitive tasks, while you point at specific elements for assertions and corrections.
+

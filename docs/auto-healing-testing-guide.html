@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>qabot Auto-Healing Feature — Complete Testing Guide</title>
+<style>
+  @page { margin: 1.5cm 2cm; size: A4; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: #1e293b; line-height: 1.7; background: #fff; padding: 40px 60px; max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 28px; color: #0f172a; border-bottom: 3px solid #6366f1; padding-bottom: 12px; margin-bottom: 8px; }
+  .subtitle { font-size: 14px; color: #64748b; margin-bottom: 30px; }
+  h2 { font-size: 22px; color: #1e40af; margin-top: 36px; margin-bottom: 12px; padding-top: 12px; border-top: 1px solid #e2e8f0; }
+  h2:first-of-type { border-top: none; }
+  h3 { font-size: 16px; color: #334155; margin-top: 20px; margin-bottom: 8px; }
+  h4 { font-size: 14px; color: #475569; margin-top: 16px; margin-bottom: 6px; }
+  p { margin-bottom: 10px; font-size: 14px; }
+  code { font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace; background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 12.5px; color: #7c3aed; }
+  pre { background: #0f172a; color: #e2e8f0; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 10px 0 16px 0; font-size: 12.5px; line-height: 1.6; font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace; }
+  pre .comment { color: #64748b; }
+  .expected { background: #f0fdf4; border-left: 4px solid #22c55e; padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 8px 0 16px 0; font-size: 13px; }
+  .expected strong { color: #15803d; }
+  .note { background: #fefce8; border-left: 4px solid #eab308; padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 8px 0 16px 0; font-size: 13px; }
+  .note strong { color: #a16207; }
+  .verify { background: #eff6ff; border-left: 4px solid #3b82f6; padding: 10px 16px; border-radius: 0 8px 8px 0; margin: 8px 0 16px 0; font-size: 13px; }
+  .verify strong { color: #1d4ed8; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 16px 0; font-size: 13px; }
+  th { background: #f1f5f9; text-align: left; padding: 8px 12px; border: 1px solid #e2e8f0; font-weight: 600; color: #334155; }
+  td { padding: 8px 12px; border: 1px solid #e2e8f0; vertical-align: top; }
+  tr:nth-child(even) { background: #fafbfd; }
+  ol, ul { margin: 8px 0 12px 24px; font-size: 14px; }
+  li { margin-bottom: 4px; }
+  .toc { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px 24px; margin: 20px 0 30px 0; }
+  .toc h3 { color: #1e40af; margin-bottom: 10px; }
+  .toc ol { margin-left: 20px; }
+  .toc li { margin-bottom: 3px; font-size: 13px; }
+  .toc a { color: #3b82f6; text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; vertical-align: middle; }
+  .badge-phase1 { background: #dbeafe; color: #1e40af; }
+  .badge-phase2 { background: #f3e8ff; color: #7c3aed; }
+  .badge-phase3 { background: #dcfce7; color: #15803d; }
+  .page-break { page-break-before: always; }
+  .header-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 12px; color: #94a3b8; }
+  hr { border: none; border-top: 1px solid #e2e8f0; margin: 24px 0; }
+</style>
+</head>
+<body>
+
+<div class="header-meta">
+  <span>qabot — AI-Powered Test Automation CLI</span>
+  <span>Document Version 1.0 — February 2026</span>
+</div>
+
+<h1>Universal Auto-Healing Feature<br>Complete Testing Guide</h1>
+<p class="subtitle">
+  Covers all 3 implementation phases:
+  <span class="badge badge-phase1">Phase 1</span> Core Engine &amp; CLI &nbsp;
+  <span class="badge badge-phase2">Phase 2</span> AI Healer &amp; Dashboard &nbsp;
+  <span class="badge badge-phase3">Phase 3</span> Settings, Fingerprints &amp; Polish
+</p>
+
+<div class="toc">
+  <h3>Table of Contents</h3>
+  <ol>
+    <li><a href="#prereq">Prerequisites &amp; Setup</a></li>
+    <li><a href="#part1">Part 1: CLI Testing (REPL Commands)</a></li>
+    <li><a href="#part2">Part 2: API Testing (HTTP Bridge)</a></li>
+    <li><a href="#part3">Part 3: UI Testing (Browser)</a></li>
+    <li><a href="#part4">Part 4: WebSocket Real-Time Testing</a></li>
+    <li><a href="#part5">Part 5: Error Handling Testing</a></li>
+    <li><a href="#part6">Part 6: End-to-End Integration Test</a></li>
+    <li><a href="#ref">Quick Reference Tables</a></li>
+  </ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="prereq">Prerequisites &amp; Setup</h2>
+
+<pre><span class="comment"># 1. Build everything</span>
+pnpm run build:ui && pnpm build
+
+<span class="comment"># 2. Start the qabot UI server (port 3700)</span>
+node bin/qabot.js /buildUI
+
+<span class="comment"># 3. Open browser</span>
+# Navigate to http://localhost:3700</pre>
+
+<div class="note">
+  <strong>Note:</strong> The healing SQLite database is stored at <code>~/.qabot/healing.db</code>.
+  If you want a clean test, delete this file before starting. On Windows the path is
+  <code>C:\Users\{username}\.qabot\healing.db</code>.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="part1" class="page-break">Part 1: CLI Testing (REPL Commands)</h2>
+
+<p>All tests below run inside the qabot REPL (interactive mode).</p>
+
+<h3>Test 1.1 — <code>/heal</code> (No Subcommand)</h3>
+<pre>/heal</pre>
+<div class="expected"><strong>Expected:</strong> Shows healing status summary — fingerprint count, event stats, success rate. If no data exists yet, shows zeros.</div>
+
+<h3>Test 1.2 — <code>/heal status</code></h3>
+<pre>/heal status</pre>
+<div class="expected"><strong>Expected:</strong> Formatted table showing:
+  &bull; Fingerprints stored count
+  &bull; Healing events (total / healed / failed)
+  &bull; Success rate %
+  &bull; Avg confidence, avg duration
+  &bull; Strategy breakdown (if events exist)
+  &bull; Framework breakdown (if events exist)
+  &bull; List of injected projects (if any)</div>
+
+<h3>Test 1.3 — <code>/heal adapters</code></h3>
+<pre>/heal adapters</pre>
+<div class="expected"><strong>Expected:</strong> Lists all 6 supported adapter combinations:
+  1. Playwright — TypeScript/JavaScript
+  2. Selenium — Java
+  3. Selenium — Python
+  4. Cypress — TypeScript
+  5. WebdriverIO — TypeScript
+  6. Selenium — C#</div>
+
+<h3>Test 1.4 — <code>/heal inject</code> (Auto-detect Framework)</h3>
+<pre><span class="comment"># First, create a dummy Playwright project:</span>
+mkdir /tmp/test-heal-project
+cd /tmp/test-heal-project
+npm init -y
+npm install @playwright/test</pre>
+<pre><span class="comment"># In qabot REPL:</span>
+/heal inject /tmp/test-heal-project</pre>
+<div class="expected"><strong>Expected:</strong>
+  &bull; Auto-detects Playwright + TypeScript
+  &bull; Creates 2 files: <code>tests/helpers/healing-client.ts</code> and <code>tests/fixtures/healing.ts</code>
+  &bull; Shows integration instructions (import the fixture, use <code>test()</code> instead of default)
+  &bull; Shows configuration (server URL, confidence threshold, AI enabled)</div>
+
+<h3>Test 1.5 — Verify Injection was Recorded</h3>
+<pre>/heal status</pre>
+<div class="verify"><strong>Verify:</strong> Shows the injected project in the list with path, framework: playwright, language: typescript, status: active.</div>
+
+<h3>Test 1.6 — <code>/heal report</code></h3>
+<pre>/heal report 7
+/heal report 30
+/heal report 90</pre>
+<div class="expected"><strong>Expected:</strong> Each shows analytics for the specified time window (likely empty/zero if fresh database).</div>
+
+<h3>Test 1.7 — <code>/heal remove</code></h3>
+<pre>/heal remove /tmp/test-heal-project</pre>
+<div class="expected"><strong>Expected:</strong> Marks the injection as removed. <code>/heal status</code> should reflect the change.</div>
+
+<!-- ============================================================ -->
+<h2 id="part2" class="page-break">Part 2: API Testing (HTTP Bridge)</h2>
+
+<p>These test the healing API endpoints that external test frameworks call. Use <code>curl</code> from a terminal while qabot UI server is running on port 3700.</p>
+
+<h3>Test 2.1 — Store a Fingerprint (Baseline)</h3>
+<pre>curl -s -X POST http://localhost:3700/api/heal/fingerprint \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:#login-button",
+    "url": "https://example.com/login",
+    "fingerprint": {
+      "tagName": "button",
+      "id": "login-button",
+      "testId": "login-btn",
+      "className": "btn btn-primary",
+      "ariaLabel": "Sign In",
+      "textContent": "Sign In",
+      "type": "submit"
+    },
+    "framework": "playwright"
+  }' | jq .</pre>
+<div class="expected"><strong>Expected:</strong> <code>{ "id": "...", "stored": true }</code></div>
+
+<h3>Test 2.2 — Store Additional Fingerprints</h3>
+<pre><span class="comment"># Second fingerprint (search input)</span>
+curl -s -X POST http://localhost:3700/api/heal/fingerprint \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:#search-input",
+    "url": "https://example.com/search",
+    "fingerprint": {
+      "tagName": "input",
+      "id": "search-input",
+      "testId": "search-box",
+      "className": "form-control search-field",
+      "ariaLabel": "Search",
+      "placeholder": "Search products...",
+      "type": "text",
+      "name": "q"
+    },
+    "framework": "playwright"
+  }' | jq .
+
+<span class="comment"># Third fingerprint (Selenium framework)</span>
+curl -s -X POST http://localhost:3700/api/heal/fingerprint \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:.nav-menu .dropdown",
+    "url": "https://example.com/dashboard",
+    "fingerprint": {
+      "tagName": "div",
+      "className": "nav-menu dropdown active",
+      "ariaLabel": "Navigation Menu",
+      "textContent": "Settings"
+    },
+    "framework": "selenium"
+  }' | jq .</pre>
+
+<h3>Test 2.3 — Resolve a Broken Selector (Main Healing Endpoint)</h3>
+<pre>curl -s -X POST http://localhost:3700/api/heal/resolve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selector": "#login-btn-old",
+    "selectorStrategy": "css",
+    "fingerprint": {
+      "tagName": "button",
+      "id": "login-btn-old",
+      "testId": "login-btn",
+      "className": "btn btn-primary updated",
+      "ariaLabel": "Sign In",
+      "textContent": "Sign In",
+      "type": "submit"
+    },
+    "pageUrl": "https://example.com/login",
+    "framework": "playwright",
+    "language": "typescript"
+  }' | jq .</pre>
+<div class="expected"><strong>Expected:</strong> Returns healed selector:
+<pre style="background:#f0fdf4;color:#1e293b;border:1px solid #bbf7d0;">{
+  "healed": true,
+  "selector": "[data-testid=\"login-btn\"]",
+  "selectorStrategy": "css",
+  "confidence": 0.90,
+  "strategy": "fingerprint",
+  "durationMs": ...,
+  "aiUsed": false,
+  "candidates": [...]
+}</pre></div>
+
+<h3>Test 2.4 — Resolve Without Stored Fingerprint (Should Fail)</h3>
+<pre>curl -s -X POST http://localhost:3700/api/heal/resolve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selector": "#unknown-element",
+    "pageUrl": "https://example.com/unknown",
+    "framework": "cypress"
+  }' | jq .</pre>
+<div class="expected"><strong>Expected:</strong> <code>{ "healed": false, ... }</code> — no stored fingerprint to match against.</div>
+
+<h3>Test 2.5 — Report Healing Outcome (Success)</h3>
+<pre>curl -s -X POST http://localhost:3700/api/heal/report \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:#login-btn-old",
+    "url": "https://example.com/login",
+    "healed": true,
+    "strategy": "fingerprint",
+    "confidence": 0.90,
+    "framework": "playwright",
+    "language": "typescript",
+    "originalSelector": "#login-btn-old",
+    "healedSelector": "[data-testid=\"login-btn\"]",
+    "durationMs": 45
+  }' | jq .</pre>
+<div class="expected"><strong>Expected:</strong> <code>{ "id": "...", "recorded": true }</code></div>
+
+<h3>Test 2.6 — Report a Failed Healing</h3>
+<pre>curl -s -X POST http://localhost:3700/api/heal/report \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:.dynamic-widget",
+    "url": "https://example.com/dashboard",
+    "healed": false,
+    "framework": "selenium",
+    "language": "java",
+    "originalSelector": ".dynamic-widget",
+    "durationMs": 250
+  }' | jq .</pre>
+
+<h3>Test 2.7 — Query Analytics</h3>
+<pre>curl -s http://localhost:3700/api/heal/analytics?days=30 | jq .</pre>
+<div class="expected"><strong>Expected:</strong> Full analytics object with <code>totalEvents</code>, <code>totalHealed</code>, <code>totalFailed</code>, <code>overallSuccessRate</code>, <code>strategyBreakdown</code>, <code>frameworkBreakdown</code> (playwright + selenium), <code>timeline</code>, and <code>topFailures</code>.</div>
+
+<h3>Test 2.8 — Query Events with Filters</h3>
+<pre><span class="comment"># All events</span>
+curl -s "http://localhost:3700/api/heal/events?days=30" | jq .
+
+<span class="comment"># Filter by framework</span>
+curl -s "http://localhost:3700/api/heal/events?framework=playwright&amp;days=30" | jq .
+
+<span class="comment"># Filter by success</span>
+curl -s "http://localhost:3700/api/heal/events?success=true&amp;days=30" | jq .
+
+<span class="comment"># With pagination</span>
+curl -s "http://localhost:3700/api/heal/events?limit=5&amp;offset=0" | jq .</pre>
+<div class="expected"><strong>Expected:</strong> Returns <code>{ events: [...], total: N }</code> with appropriate filtering.</div>
+
+<h3>Test 2.9 — List Adapters</h3>
+<pre>curl -s http://localhost:3700/api/heal/adapters | jq .</pre>
+<div class="expected"><strong>Expected:</strong> 6 adapters: Playwright (TS), Selenium (Java), Selenium (Python), Cypress (TS), WebdriverIO (TS), Selenium (C#)</div>
+
+<h3>Test 2.10 — Fingerprint CRUD</h3>
+<pre><span class="comment"># List all fingerprints</span>
+curl -s "http://localhost:3700/api/healing/fingerprints" | jq .
+
+<span class="comment"># Search fingerprints</span>
+curl -s "http://localhost:3700/api/healing/fingerprints?search=login" | jq .
+
+<span class="comment"># Paginate</span>
+curl -s "http://localhost:3700/api/healing/fingerprints?limit=10&amp;offset=0" | jq .
+
+<span class="comment"># Delete a fingerprint (use actual ID from the list above)</span>
+curl -s -X DELETE "http://localhost:3700/api/healing/fingerprints/&lt;ID&gt;" | jq .</pre>
+
+<h3>Test 2.11 — Healing Config API</h3>
+<pre><span class="comment"># Read config</span>
+curl -s http://localhost:3700/api/healing/config | jq .
+
+<span class="comment"># Update config</span>
+curl -s -X PUT http://localhost:3700/api/healing/config \
+  -H "Content-Type: application/json" \
+  -d '{ "confidenceThreshold": 0.8, "aiEnabled": false }' | jq .
+
+<span class="comment"># Verify update persisted</span>
+curl -s http://localhost:3700/api/healing/config | jq .</pre>
+<div class="expected"><strong>Expected:</strong> Config reads back with updated values: <code>confidenceThreshold: 0.8</code>, <code>aiEnabled: false</code></div>
+
+<h3>Test 2.12 — Healing Stats</h3>
+<pre>curl -s http://localhost:3700/api/healing/stats | jq .</pre>
+<div class="expected"><strong>Expected:</strong> <code>{ "total": N, "successCount": N, "failureCount": N, "successRate": N, "available": true }</code></div>
+
+<!-- ============================================================ -->
+<h2 id="part3" class="page-break">Part 3: UI Testing (Browser)</h2>
+
+<p>Open <code>http://localhost:3700</code> in your browser. If auth is configured, log in first.</p>
+
+<h3>Test 3.1 — Main Dashboard &rarr; HealingCard</h3>
+<ol>
+  <li>Navigate to <code>/</code> (Dashboard)</li>
+  <li><strong>Verify:</strong> A "Self-Healing" card appears in the bottom section</li>
+  <li><strong>Verify:</strong> Shows "Elements tracked" count and "Success rate" percentage</li>
+  <li><strong>Verify:</strong> Card is clickable — clicking navigates to <code>/healing</code></li>
+</ol>
+<div class="note"><strong>Note:</strong> If no healing data exists, the card may be hidden (returns null when <code>available: false</code>).</div>
+
+<h3>Test 3.2 — Healing Dashboard &rarr; Overview Tab</h3>
+<ol>
+  <li>Navigate to <code>/healing</code> (click "Healing" in the sidebar or the dashboard card)</li>
+  <li><strong>Verify:</strong> Page title "Self-Healing Dashboard" with Heart icon</li>
+  <li><strong>Verify:</strong> Day filter dropdown (7 / 30 / 90 days) in top-right corner</li>
+  <li><strong>Verify:</strong> 6 overview stat cards at the top:
+    <ul>
+      <li>Total Events (blue Activity icon)</li>
+      <li>Success Rate (color-coded: green &ge;80%, amber &ge;50%, red &lt;50%)</li>
+      <li>Avg Confidence (brand color)</li>
+      <li>Avg Duration (cyan Clock icon)</li>
+      <li>AI Usage % (violet Sparkles icon)</li>
+      <li>Active Projects (pink FolderOpen icon)</li>
+    </ul>
+  </li>
+  <li><strong>Verify:</strong> 5 tabs visible: <strong>Overview</strong> | <strong>Events</strong> | <strong>Fingerprints</strong> | <strong>Projects</strong> | <strong>Adapters</strong></li>
+  <li><strong>Verify:</strong> Overview tab shows (when data exists):
+    <ul>
+      <li><strong>Healing Trend</strong> chart (stacked area: green healed / red failed + purple success % line)</li>
+      <li><strong>Strategy Breakdown</strong> bar chart (color-coded per strategy)</li>
+      <li><strong>Framework Breakdown</strong> horizontal bar chart</li>
+      <li><strong>Top Failures</strong> table (selector, URL, failure count, last seen)</li>
+    </ul>
+  </li>
+  <li><strong>Test day filter:</strong> Change from 30 &rarr; 7 days &rarr; verify data updates</li>
+  <li><strong>Test empty state:</strong> With no data, charts show "No healing data yet" messages</li>
+</ol>
+
+<h3>Test 3.3 — Healing Dashboard &rarr; Events Tab</h3>
+<ol>
+  <li>Click "Events" tab</li>
+  <li><strong>Verify:</strong> Search bar, Framework dropdown, Result dropdown (All/Healed/Failed), event count</li>
+  <li><strong>Verify:</strong> Table columns: Status | Selector | Healed To | Strategy | Framework | Confidence | Duration | Time</li>
+  <li><strong>Verify:</strong> Status icons: green checkmark for healed, red X for failed</li>
+  <li><strong>Verify:</strong> AI-powered events show purple Sparkles icon next to strategy</li>
+  <li><strong>Verify:</strong> Confidence is color-coded (green &ge;0.8, amber &ge;0.5, red &lt;0.5)</li>
+  <li><strong>Test search:</strong> Type a selector name &rarr; table filters in real-time</li>
+  <li><strong>Test framework filter:</strong> Select "playwright" &rarr; only Playwright events shown</li>
+  <li><strong>Test result filter:</strong> Select "Healed" &rarr; only successful heals shown</li>
+  <li><strong>Test pagination:</strong> If &gt;25 events, verify prev/next buttons and "Showing X–Y of Z" text</li>
+</ol>
+
+<h3>Test 3.4 — Events Tab &rarr; Detail Panel</h3>
+<ol>
+  <li>On the Events tab, <strong>click any event row</strong></li>
+  <li><strong>Verify:</strong> A 380px side panel opens on the right</li>
+  <li><strong>Verify panel contents:</strong>
+    <ul>
+      <li>Header with Healed/Failed badge + AI badge (if applicable) + X close button</li>
+      <li><strong>Selector Change:</strong> Original selector (red box) &rarr; arrow &rarr; Healed selector (green box)</li>
+      <li><strong>Strategy:</strong> Name + human-readable description</li>
+      <li><strong>Confidence:</strong> Large % number + High/Medium/Low label + progress bar</li>
+      <li><strong>Details grid:</strong> URL, Framework, Language, Duration, Timestamp</li>
+    </ul>
+  </li>
+  <li><strong>Verify:</strong> Selected row is highlighted in the table (left blue border)</li>
+  <li><strong>Click another row:</strong> Panel updates to show new event details</li>
+  <li><strong>Click X button:</strong> Panel closes, row highlight removed</li>
+</ol>
+
+<h3>Test 3.5 — Healing Dashboard &rarr; Fingerprints Tab</h3>
+<ol>
+  <li>Click "Fingerprints" tab</li>
+  <li><strong>Verify:</strong> Search bar at top</li>
+  <li><strong>Verify:</strong> Table columns: Selector Key | URL | Success | Failures | Updated | Delete</li>
+  <li><strong>Verify:</strong> Fingerprints stored via API (Tests 2.1–2.2) are visible</li>
+  <li><strong>Test search:</strong> Type "login" &rarr; filters to matching fingerprints</li>
+  <li><strong>Test delete:</strong>
+    <ul>
+      <li>Click trash icon on a fingerprint row</li>
+      <li>Verify: Confirmation appears ("Confirm" / "Cancel")</li>
+      <li>Click "Cancel" &rarr; nothing happens</li>
+      <li>Click trash again &rarr; click "Confirm" &rarr; fingerprint is deleted</li>
+      <li>Verify: Fingerprint disappears from list</li>
+    </ul>
+  </li>
+  <li><strong>Test pagination:</strong> If &gt;25 fingerprints, verify page controls work</li>
+  <li><strong>Test empty state:</strong> If all deleted, shows "No fingerprints found" with Fingerprint icon</li>
+</ol>
+
+<h3>Test 3.6 — Healing Dashboard &rarr; Projects Tab</h3>
+<ol>
+  <li>Click "Projects" tab</li>
+  <li><strong>Verify:</strong> Cards for injected projects (from <code>/heal inject</code> or API)</li>
+  <li>Each card should show:
+    <ul>
+      <li>Project name + full path</li>
+      <li>Status badge (active=green, disabled=amber, removed=red)</li>
+      <li>Framework + Language grid</li>
+      <li>Confidence threshold + AI enabled/disabled</li>
+      <li>Generated files list (up to 4 shown, "+N more" if more)</li>
+      <li>Healing server URL</li>
+      <li>Injection timestamp</li>
+    </ul>
+  </li>
+  <li><strong>Test remove:</strong> Click "Remove" &rarr; toast: "Injection removed successfully"</li>
+  <li><strong>Test empty state:</strong> Shows "No injected projects" with instructions</li>
+</ol>
+
+<h3>Test 3.7 — Healing Dashboard &rarr; Adapters Tab</h3>
+<ol>
+  <li>Click "Adapters" tab</li>
+  <li><strong>Verify:</strong> 6 adapter cards in a 3-column grid</li>
+  <li>Cards: Playwright (rose), Selenium Java (amber), Selenium Python (amber), Cypress (cyan), WebdriverIO (violet), Selenium C# (amber)</li>
+  <li>Each card shows: Display name, Framework tag, Language tag, Puzzle icon</li>
+</ol>
+
+<h3>Test 3.8 — Settings Page &rarr; Healing Section</h3>
+<ol>
+  <li>Navigate to <code>/settings</code></li>
+  <li><strong>Verify:</strong> "Self-Healing" card exists between "Appearance" and "Cloud Grid Providers"</li>
+  <li><strong>Verify controls:</strong>
+    <ul>
+      <li>Enable self-healing checkbox (default: checked)</li>
+      <li>Confidence Threshold slider (0.10–1.00, default: 0.70)</li>
+      <li>Enable AI-powered healing checkbox (default: checked)</li>
+      <li>Data Retention dropdown (30/60/90/180 days, default: 90)</li>
+    </ul>
+  </li>
+  <li><strong>Test slider:</strong> Drag confidence threshold &rarr; value label updates in real-time</li>
+  <li><strong>Test save:</strong>
+    <ul>
+      <li>Change confidence to 0.85, uncheck AI, change retention to 60 days</li>
+      <li>Click "Save Healing Settings" &rarr; success toast appears</li>
+      <li>Refresh page &rarr; settings persist</li>
+    </ul>
+  </li>
+  <li><strong>Verify via API:</strong> <code>curl http://localhost:3700/api/healing/config</code> shows updated values</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2 id="part4" class="page-break">Part 4: WebSocket Real-Time Testing</h2>
+
+<h3>Test 4.1 — Real-Time Event Updates</h3>
+<ol>
+  <li>Open <code>/healing</code> &rarr; Events tab in the browser</li>
+  <li>Note the current event count</li>
+  <li>In a terminal, trigger a healing resolve:</li>
+</ol>
+<pre>curl -s -X POST http://localhost:3700/api/heal/resolve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selector": "#realtime-test-btn",
+    "fingerprint": {
+      "tagName": "button",
+      "testId": "realtime-btn",
+      "textContent": "Click Me"
+    },
+    "pageUrl": "https://example.com/realtime",
+    "framework": "cypress",
+    "language": "typescript"
+  }'</pre>
+<div class="verify">
+  <strong>Verify (no page refresh needed):</strong>
+  <ul>
+    <li>Events table updates automatically with new event</li>
+    <li>Overview cards update (Total Events count increases)</li>
+    <li>If on Overview tab, trend chart data refreshes</li>
+  </ul>
+</div>
+
+<h3>Test 4.2 — Real-Time Analytics Update</h3>
+<ol>
+  <li>Open <code>/healing</code> &rarr; Overview tab</li>
+  <li>Run several resolve + report curl commands with different frameworks</li>
+  <li><strong>Verify:</strong> Strategy breakdown chart updates in real-time</li>
+  <li><strong>Verify:</strong> Framework breakdown shows new frameworks</li>
+  <li><strong>Verify:</strong> Timeline chart reflects new data points</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2 id="part5" class="page-break">Part 5: Error Handling Testing</h2>
+
+<h3>Test 5.1 — Network Error States</h3>
+<ol>
+  <li>Navigate to <code>/healing</code></li>
+  <li>Stop the qabot server (Ctrl+C in the terminal)</li>
+  <li>Wait ~30 seconds for React Query auto-refetch to fire</li>
+  <li><strong>Verify:</strong> All healing components show red error cards:</li>
+</ol>
+
+<table>
+  <tr><th>Component</th><th>Expected Error Message</th></tr>
+  <tr><td>HealingOverviewCards</td><td>"Failed to load healing overview"</td></tr>
+  <tr><td>HealingTrendChart</td><td>"Failed to load trend data"</td></tr>
+  <tr><td>StrategyBreakdownChart</td><td>"Failed to load strategy data"</td></tr>
+  <tr><td>FrameworkBreakdownChart</td><td>"Failed to load framework data"</td></tr>
+  <tr><td>TopFailuresTable</td><td>"Failed to load failure data"</td></tr>
+  <tr><td>HealingEventsTable</td><td>"Failed to load events"</td></tr>
+  <tr><td>InjectedProjectsPanel</td><td>"Failed to load projects"</td></tr>
+  <tr><td>AdaptersList</td><td>"Failed to load adapters"</td></tr>
+</table>
+
+<div class="verify"><strong>Verify:</strong> Each error card shows AlertCircle icon + error message + technical detail text. <strong>Restart server</strong> &rarr; components auto-recover on next refetch cycle.</div>
+
+<h3>Test 5.2 — Fingerprint Browser Error State</h3>
+<ol>
+  <li>Navigate to <code>/healing</code> &rarr; Fingerprints tab</li>
+  <li>Stop the server</li>
+  <li><strong>Verify:</strong> Red error card: "Failed to load fingerprints"</li>
+  <li>Restart server &rarr; data reappears</li>
+</ol>
+
+<h3>Test 5.3 — InjectedProjectsPanel Toast on Error</h3>
+<ol>
+  <li>Navigate to <code>/healing</code> &rarr; Projects tab</li>
+  <li>Click "Remove" on a project when server is down</li>
+  <li><strong>Verify:</strong> Error toast appears ("Remove failed: ...")</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2 id="part6" class="page-break">Part 6: End-to-End Integration Test</h2>
+
+<p>This is the full realistic workflow: inject healing &rarr; build baselines &rarr; break selectors &rarr; verify auto-heal.</p>
+
+<h3>Step 1: Create a Test Project</h3>
+<pre>mkdir /tmp/e2e-heal-test && cd /tmp/e2e-heal-test
+npm init -y
+npm install @playwright/test
+npx playwright install chromium</pre>
+
+<h3>Step 2: Inject Healing via CLI</h3>
+<pre><span class="comment"># In qabot REPL:</span>
+/heal inject /tmp/e2e-heal-test</pre>
+<div class="verify"><strong>Verify:</strong> Two files created under <code>tests/helpers/</code> and <code>tests/fixtures/</code>.</div>
+
+<h3>Step 3: Verify in UI</h3>
+<ol>
+  <li>Go to <code>http://localhost:3700/healing</code> &rarr; Projects tab</li>
+  <li><strong>Verify:</strong> <code>/tmp/e2e-heal-test</code> appears as active injection</li>
+</ol>
+
+<h3>Step 4: Store Baselines via API</h3>
+<pre><span class="comment"># Simulate what the injected code does on a passing test</span>
+curl -s -X POST http://localhost:3700/api/heal/fingerprint \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:h1",
+    "url": "https://example.com",
+    "fingerprint": {
+      "tagName": "h1",
+      "textContent": "Example Domain",
+      "className": ""
+    },
+    "framework": "playwright"
+  }'</pre>
+
+<h3>Step 5: Simulate a Broken Selector</h3>
+<pre>curl -s -X POST http://localhost:3700/api/heal/resolve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selector": "h1.old-heading",
+    "pageUrl": "https://example.com",
+    "framework": "playwright",
+    "language": "typescript",
+    "fingerprint": {
+      "tagName": "h1",
+      "textContent": "Example Domain"
+    }
+  }' | jq .</pre>
+<div class="verify"><strong>Verify:</strong> Returns healed selector (e.g., text match strategy).</div>
+
+<h3>Step 6: Report Success</h3>
+<pre>curl -s -X POST http://localhost:3700/api/heal/report \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selectorKey": "css:h1.old-heading",
+    "url": "https://example.com",
+    "healed": true,
+    "strategy": "textMatch",
+    "confidence": 0.75,
+    "framework": "playwright",
+    "originalSelector": "h1.old-heading",
+    "healedSelector": "text=Example Domain",
+    "durationMs": 30
+  }'</pre>
+
+<h3>Step 7: Verify Full Flow in UI</h3>
+<ol>
+  <li><strong>Dashboard</strong> (<code>/</code>): HealingCard shows updated stats</li>
+  <li><strong>Healing &rarr; Overview:</strong> Trend chart shows today's heal, strategy breakdown shows textMatch</li>
+  <li><strong>Healing &rarr; Events:</strong> New event row visible with strategy "textMatch"</li>
+  <li><strong>Click event row:</strong> Detail panel shows <code>h1.old-heading</code> &rarr; <code>text=Example Domain</code></li>
+  <li><strong>Healing &rarr; Fingerprints:</strong> <code>css:h1</code> fingerprint shows success count</li>
+  <li><strong>Settings &rarr; Self-Healing:</strong> Config values match your settings</li>
+</ol>
+
+<h3>Step 8: Clean Up</h3>
+<pre><span class="comment"># In qabot REPL:</span>
+/heal remove /tmp/e2e-heal-test</pre>
+<pre>rm -rf /tmp/e2e-heal-test</pre>
+
+<!-- ============================================================ -->
+<h2 id="ref" class="page-break">Quick Reference Tables</h2>
+
+<h3>All API Endpoints</h3>
+<table>
+  <tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
+  <tr><td>POST</td><td><code>/api/heal/resolve</code></td><td>Main healing — receive broken selector, return healed</td></tr>
+  <tr><td>POST</td><td><code>/api/heal/fingerprint</code></td><td>Store element baseline fingerprint</td></tr>
+  <tr><td>POST</td><td><code>/api/heal/report</code></td><td>Report healing success/failure</td></tr>
+  <tr><td>GET</td><td><code>/api/heal/events</code></td><td>Query healing event log</td></tr>
+  <tr><td>GET</td><td><code>/api/heal/analytics</code></td><td>Rich analytics (charts, breakdowns)</td></tr>
+  <tr><td>GET</td><td><code>/api/heal/injections</code></td><td>List injected projects</td></tr>
+  <tr><td>POST</td><td><code>/api/heal/inject</code></td><td>Record injection metadata</td></tr>
+  <tr><td>DELETE</td><td><code>/api/heal/injections/:id</code></td><td>Remove injection</td></tr>
+  <tr><td>GET</td><td><code>/api/heal/adapters</code></td><td>List supported adapters</td></tr>
+  <tr><td>GET</td><td><code>/api/healing/stats</code></td><td>Basic healing stats</td></tr>
+  <tr><td>GET</td><td><code>/api/healing/fingerprints</code></td><td>Browse/search stored fingerprints</td></tr>
+  <tr><td>DELETE</td><td><code>/api/healing/fingerprints/:id</code></td><td>Delete a fingerprint</td></tr>
+  <tr><td>GET</td><td><code>/api/healing/config</code></td><td>Read healing configuration</td></tr>
+  <tr><td>PUT</td><td><code>/api/healing/config</code></td><td>Update healing configuration</td></tr>
+  <tr><td>GET</td><td><code>/api/healing/by-url</code></td><td>Fingerprints for a specific URL</td></tr>
+</table>
+
+<h3>All UI Routes</h3>
+<table>
+  <tr><th>Route</th><th>Page</th><th>What to Test</th></tr>
+  <tr><td><code>/</code></td><td>Dashboard</td><td>HealingCard in bottom section</td></tr>
+  <tr><td><code>/healing</code></td><td>Healing Dashboard</td><td>5 tabs: Overview, Events, Fingerprints, Projects, Adapters</td></tr>
+  <tr><td><code>/settings</code></td><td>Settings</td><td>Self-Healing section with config controls</td></tr>
+</table>
+
+<h3>All CLI Commands</h3>
+<table>
+  <tr><th>Command</th><th>What it Does</th></tr>
+  <tr><td><code>/heal</code></td><td>Show healing status (alias for <code>/heal status</code>)</td></tr>
+  <tr><td><code>/heal status</code></td><td>Detailed status with stats</td></tr>
+  <tr><td><code>/heal inject [path]</code></td><td>Inject healing into test project</td></tr>
+  <tr><td><code>/heal report [days]</code></td><td>Generate analytics report</td></tr>
+  <tr><td><code>/heal remove &lt;path&gt;</code></td><td>Remove healing from project</td></tr>
+  <tr><td><code>/heal adapters</code></td><td>List supported frameworks</td></tr>
+</table>
+
+<h3>6-Strategy Healing Chain</h3>
+<table>
+  <tr><th>#</th><th>Strategy</th><th>Description</th><th>Confidence</th></tr>
+  <tr><td>1</td><td>Fingerprint Match</td><td>Match by stored element attributes (tag, id, class, text, role)</td><td>0.85–0.92</td></tr>
+  <tr><td>2</td><td>Similar Selector</td><td>Find CSS selector with high textual similarity</td><td>0.70–0.85</td></tr>
+  <tr><td>3</td><td>Text Match</td><td>Locate element by visible text content</td><td>0.75</td></tr>
+  <tr><td>4</td><td>Position Match</td><td>Find element at similar bounding box position</td><td>0.60–0.70</td></tr>
+  <tr><td>5</td><td>Ancestor Search</td><td>Navigate parent/sibling tree to locate element</td><td>0.60–0.75</td></tr>
+  <tr><td>6</td><td>AI Healing</td><td>LLM analyzes fingerprint + DOM to suggest selector</td><td>0.60+</td></tr>
+</table>
+
+<h3>Supported Adapters (6 Framework/Language Combinations)</h3>
+<table>
+  <tr><th>Framework</th><th>Language</th><th>Generated Files</th></tr>
+  <tr><td>Playwright</td><td>TypeScript/JS</td><td><code>tests/helpers/healing-client.ts</code>, <code>tests/fixtures/healing.ts</code></td></tr>
+  <tr><td>Selenium</td><td>Java</td><td>5 files in <code>src/test/java/healing/</code></td></tr>
+  <tr><td>Selenium</td><td>Python</td><td>6 files in <code>tests/healing/</code></td></tr>
+  <tr><td>Cypress</td><td>TypeScript</td><td>4 files in <code>cypress/support/</code> + <code>cypress/plugins/</code></td></tr>
+  <tr><td>WebdriverIO</td><td>TypeScript</td><td>3 files in <code>test/helpers/</code></td></tr>
+  <tr><td>Selenium</td><td>C#/.NET</td><td>5 files in <code>Healing/</code></td></tr>
+</table>
+
+<hr>
+<p style="text-align:center; color:#94a3b8; font-size:12px; margin-top:24px;">
+  Generated for qabot v0.1.0 &mdash; Universal Auto-Healing Feature (Phases 1–3)
+</p>
+
+</body>
+</html>

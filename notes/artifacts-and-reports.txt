@@ -1,0 +1,21 @@
+What Works for ALL Frameworks
+Feature	Playwright	Jest/Vitest	Cucumber	pytest/Robot/Maven/.NET	Any (stdout)
+Test name	✅	✅	✅	✅	✅
+Suite/class	✅	✅	✅	✅	✅
+File path	✅	✅	✅	✅	~partial
+Status	✅	✅	✅	✅	✅
+Duration	✅	✅	✅	✅	~partial
+Error message	✅	✅	✅	✅	~partial
+Stack trace	✅	✅	❌	✅	❌
+Browser detect	✅	✅	✅	✅	✅
+BDD steps	❌	❌	✅	❌	✅ (Cucumber)
+What's Playwright-ONLY
+Feature	Playwright	Everyone Else
+Screenshots	✅	❌
+Videos	✅	❌
+Traces	✅	❌
+Retry count	✅	❌
+ANSI stripping	✅	❌
+So to answer your question: test results, errors, and status work for all frameworks. But screenshots, videos, and traces only work for Playwright — because only Playwright's JSON report includes attachment paths in a standardized way.
+
+The other frameworks (Jest, Cucumber, pytest, Robot, Maven, .NET) don't have a built-in way to report artifact file locations in their output formats.

@@ -1,0 +1,216 @@
+Context
+Phase 1 built the core healing engine (6-strategy chain, HTTP bridge, 3 adapters, HealingStore, CLI tools). Phase 2 added AI Healer, DOM Analyzer, 3 more adapters (Cypress/WDIO/C#), and a 10-component React dashboard with 4-tab layout.
+Phase 3 addresses integration gaps discovered during review: the HealingCard component exists but was never wired into the main Dashboard, there's no settings UI for healing configuration, the events table lacks drill-down details, fingerprints can't be browsed or managed, healing events aren't broadcast via WebSocket for real-time updates, and components lack proper error states.
+
+Implementation Steps
+Step 1: Dashboard HealingCard Integration
+Quick win — wire up existing component
+Modify: ui-app/src/components/dashboard/Dashboard.tsx
+
+Import HealingCard from ./HealingCard (component already exists, returns null when !data?.available)
+Add <HealingCard /> after the Failures+Flaky+Activity grid row (line 70), as a full-width card
+No conditional wrapper needed — the component handles its own visibility
+
+
+Step 2: Healing Settings Tab
+Backend config API + Settings page section
+2a. Extend healing config schema
+Modify: src/config/defaults.ts (line 54-58)
+
+Add aiEnabled: true and retentionDays: 90 to the healing object
+
+Modify: src/types/index.ts — update QabotConfig.healing type to include aiEnabled?: boolean and retentionDays?: number
+2b. Backend config endpoints
+Modify: src/ui/routes/api-healing.ts
+
+Add GET /api/healing/config — reads healing config via getConfig().getHealingConfig()
+Add PUT /api/healing/config — saves individual fields via config.set('healing.enabled', ...) etc.
+Import getConfig from ../../config/config.js
+
+2c. Frontend API + Settings section
+Modify: ui-app/src/api/client.ts
+
+Add getHealingConfig() → GET /api/healing/config
+Add saveHealingConfig(config) → PUT /api/healing/config
+
+Modify: ui-app/src/components/layout/SettingsPage.tsx
+
+Import Heart from lucide-react, getHealingConfig, saveHealingConfig from client
+Add new settings card between Appearance and Cloud Grid sections
+Controls: Enable/disable toggle, confidence threshold slider (0.1-1.0), AI healing toggle, retention dropdown (30/60/90/180 days)
+Save button with toast feedback, follows same card pattern as Cloud Grid section
+
+
+Step 3: Fingerprint Browser
+New tab in healing dashboard + backend API fixes
+3a. Backend: fix fingerprints endpoint + add delete
+Modify: src/healing/store.ts
+
+Add deleteFingerprint(id: string): void method — DELETE FROM fingerprints WHERE id = ?
+Add offset param to getEvents() — OFFSET ? in SQL query
+
+Modify: src/ui/routes/api-healing.ts
+
+Replace stubbed GET /api/healing/fingerprints with real implementation using healingStore.getAll() + search/url filtering + pagination (offset/limit params)
+Add DELETE /api/healing/fingerprints/:id using healingStore.deleteFingerprint()
+
+3b. Frontend: API + hooks
+Modify: ui-app/src/api/client.ts
+
+Add getHealingFingerprints(params?) → GET /api/healing/fingerprints?search=&url=&offset=&limit=
+Add deleteHealingFingerprint(id) → DELETE /api/healing/fingerprints/:id
+
+Modify: ui-app/src/hooks/useHealing.ts
+
+Add useHealingFingerprints(params?) — queryKey ['healing-fingerprints', params], refetchInterval 30s
+Add useDeleteFingerprint() — useMutation, invalidates ['healing-fingerprints'] + ['healing-stats']
+
+3c. New component + dashboard integration
+New file: ui-app/src/components/healing/FingerprintBrowser.tsx
+
+Search input (debounced, filters by selector key or URL)
+Table: Selector Key, URL, Success Count, Failure Count, Last Updated
+Delete button per row with confirmation
+Pagination (offset/limit), empty state message
+Uses useHealingFingerprints + useDeleteFingerprint
+
+Modify: ui-app/src/components/healing/HealingDashboard.tsx
+
+Add 5th tab: fingerprints → "Fingerprints" between Events and Projects
+Render <FingerprintBrowser /> when active
+
+
+Step 4: Event Detail Panel
+Click-to-expand side panel on events table
+New file: ui-app/src/components/healing/HealingEventDetailPanel.tsx
+
+Receives a single event object + onClose callback
+Sections:
+
+Header: status badge (healed/failed) + close button
+Selector diff: original (red mono) → healed (green mono), visual before/after
+Strategy explanation: human-readable description per strategy
+Confidence bar: 0-1 visual with color coding
+Metadata grid: URL, framework, language, duration, timestamp, AI used badge
+
+
+
+Modify: ui-app/src/components/healing/HealingEventsTable.tsx
+
+Add selectedEvent state
+Add onClick to table rows (cursor-pointer, highlight selected)
+Wrap table in flex layout: <div className="flex gap-4"> with table as flex-1 and detail panel as w-[380px] side panel
+Add pagination: page state, PAGE_SIZE=25, prev/next controls, "Showing X-Y of Z" text
+
+
+Step 5: WebSocket Healing Events
+Real-time updates when external frameworks heal selectors
+5a. Backend: pass wss + broadcast
+Modify: src/ui/routes/api-healing-universal.ts
+
+Add wss?: WebSocketServer parameter to mountUniversalHealingRoutes()
+Import WebSocketServer from ws
+After each healingStore.saveEvent() call in POST /api/heal/resolve and POST /api/heal/report, broadcast { type: 'healing-event', event: {...} } to all connected WebSocket clients
+
+Modify: src/ui/server.ts (line 174)
+
+Pass wss to mountUniversalHealingRoutes(app, healingStore, wss) — wss is already available (line 47)
+
+5b. Frontend: handle WS messages
+Modify: ui-app/src/components/layout/AppShell.tsx (line 37-55 subscribe handler)
+
+Add handler for msg.type === 'healing-event': invalidate ['healing-events'], ['healing-analytics'], ['healing-stats'] query caches for real-time dashboard refresh
+
+
+Step 6: Error Handling & Polish
+Add error states to all healing components
+Modify 8 component files — add isError, error destructuring from hooks, render error card:
+
+HealingOverviewCards.tsx
+HealingTrendChart.tsx
+StrategyBreakdownChart.tsx
+FrameworkBreakdownChart.tsx
+TopFailuresTable.tsx
+HealingEventsTable.tsx
+InjectedProjectsPanel.tsx
+AdaptersList.tsx
+
+Pattern for each:
+tsxconst { data, isLoading, isError, error } = useHealingXxx();
+if (isError) return (
+  <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-6 text-center">
+    <AlertCircle size={24} className="mx-auto text-red-400 mb-2" />
+    <p className="text-sm text-red-300">Failed to load data</p>
+    <p className="text-xs text-gray-500 mt-1">{(error as Error)?.message}</p>
+  </div>
+);
+```
+
+**Modify: `InjectedProjectsPanel.tsx`**
+- Import `useToast`, add toast on remove success/error
+
+---
+
+### Step 7: Build & Verify
+```
+pnpm run build:ui   # Vite → src/ui/static/
+pnpm build          # tsup → dist/index.js
+
+File Inventory
+New Files (2)
+FileStepui-app/src/components/healing/HealingEventDetailPanel.tsx4ui-app/src/components/healing/FingerprintBrowser.tsx3c
+Modified Files (15)
+FileStepChangessrc/config/defaults.ts2aAdd aiEnabled, retentionDays to healing configsrc/types/index.ts2aUpdate QabotConfig.healing typesrc/healing/store.ts3aAdd deleteFingerprint(), add offset to getEvents()src/ui/routes/api-healing.ts2b, 3aConfig GET/PUT endpoints, fix fingerprints GET, add fingerprint DELETEsrc/ui/routes/api-healing-universal.ts5aAccept wss param, broadcast healing eventssrc/ui/server.ts5aPass wss to universal healing routesui-app/src/api/client.ts2c, 3bAdd config, fingerprint API functionsui-app/src/hooks/useHealing.ts3bAdd fingerprint hooksui-app/src/components/dashboard/Dashboard.tsx1Import + render HealingCardui-app/src/components/layout/SettingsPage.tsx2cAdd healing settings card sectionui-app/src/components/layout/AppShell.tsx5bHandle healing-event WS messagesui-app/src/components/healing/HealingDashboard.tsx3cAdd Fingerprints tabui-app/src/components/healing/HealingEventsTable.tsx4, 6Detail panel, pagination, error stateui-app/src/components/healing/InjectedProjectsPanel.tsx6Toast notifications, error stateui-app/src/components/healing/*.tsx (6 more)6Error states (Overview Cards, TrendChart, StrategyChart, FrameworkChart, TopFailures, AdaptersList)
+
+Verification
+
+Build: pnpm run build:ui && pnpm build — no errors
+Dashboard: Main dashboard at / shows HealingCard (or nothing if healing has no data)
+Settings: /settings shows Healing section with enable toggle, threshold slider, AI toggle, retention dropdown; save persists across reload
+Fingerprints tab: /healing → Fingerprints tab shows stored fingerprints; search filters; delete works
+Event details: Click event row → side panel with selector diff, strategy explanation, metadata
+Pagination: Events table pages through results (25 per page)
+WebSocket: When /api/heal/resolve is called (e.g. via curl), healing dashboard updates in real-time without manual refresh
+Error states: Disconnect network → components show red error cards instead of blank/broken
+Toast: Remove an injected project → success toast appears
+
+======================================
+
+Phase 3 is complete! Here's a summary of everything implemented:
+
+Feature 5, Phase 3: Polish, Settings & Integration — Complete
+Step 1: Dashboard HealingCard Integration ✅
+
+Wired existing HealingCard component into main Dashboard.tsx — renders after the bottom grid row, self-hides when no healing data
+Step 2: Healing Settings ✅
+
+Extended config schema (src/types/config.ts) with aiEnabled and retentionDays
+Updated defaults (src/config/defaults.ts)
+Backend API: GET/PUT /api/healing/config in api-healing.ts
+Frontend: getHealingConfig() + saveHealingConfig() in client.ts
+Settings UI card in SettingsPage.tsx: enable toggle, confidence threshold slider (0.1–1.0), AI healing toggle, retention dropdown (30/60/90/180 days), save button with toast
+Step 3: Fingerprint Browser ✅
+
+Backend: deleteFingerprint() method in store.ts, fixed GET /api/healing/fingerprints with real data + search/pagination, added DELETE /api/healing/fingerprints/:id
+Frontend: getHealingFingerprints() + deleteHealingFingerprint() API, useHealingFingerprints + useDeleteFingerprint hooks
+New FingerprintBrowser.tsx component: debounced search, paginated table (25/page), delete with confirmation
+Added as 5th "Fingerprints" tab in HealingDashboard.tsx
+Step 4: Event Detail Panel ✅
+
+New HealingEventDetailPanel.tsx: selector diff (red→green), strategy explanation, confidence bar, metadata grid (URL, framework, language, duration, timestamp, AI badge)
+Rewrote HealingEventsTable.tsx: click-to-select rows, side panel layout, pagination (25/page with prev/next controls)
+Step 5: WebSocket Healing Events ✅
+
+Backend: broadcastHealingEvent() in api-healing-universal.ts, broadcasts after every saveEvent() call
+Passed wss to mountUniversalHealingRoutes() in server.ts
+Frontend: AppShell.tsx now handles healing-event WS messages, invalidating all healing query caches for real-time updates
+Step 6: Error Handling & Polish ✅
+
+Added isError/error destructuring + red error cards to all 8 healing components: HealingOverviewCards, HealingTrendChart, StrategyBreakdownChart, FrameworkBreakdownChart, TopFailuresTable, HealingEventsTable, InjectedProjectsPanel, AdaptersList
+Added toast notifications on injection remove (success/error) in InjectedProjectsPanel
+Step 7: Build & Verify ✅
+
+UI: 1.32 MB (Vite build successful)
+Backend: 1.11 MB (tsup build successful)
+2 new files, 15 modified files — zero build errors
+

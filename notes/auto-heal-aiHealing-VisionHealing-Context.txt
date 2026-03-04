@@ -1,0 +1,195 @@
+Context
+The user's question: "How will aiHealing and visionHealing work — we're not capturing test name and step name — what context are we sending to resolve?"
+Current state: AI and Vision healing work, but with minimal context to the LLM. The LLM receives a broken selector + stored fingerprint attributes + optional screenshot, but has no idea:
+
+What test is running
+What step/action failed (click? fill? hover?)
+What scenario/describe block this is in
+What the test file path is
+What the current DOM looks like
+
+This significantly reduces the LLM's ability to make accurate suggestions.
+
+Gap Analysis — What's Sent vs What's Missing
+Phase 2: AI Text-Based Healing (resolveAI → AIHealer.heal())
+Currently sent to LLM:
+
+✅ Broken selector string
+✅ Stored fingerprint (~13 attributes: tagName, id, testId, className, ariaLabel, etc.)
+✅ Optional DOM context (via domSnapshot param — but no adapter actually sends this)
+❌ Test name (e.g., "Login with valid credentials")
+❌ Step name (e.g., "When I click the login button")
+❌ Scenario/describe name (e.g., "Login functionality")
+❌ Action type (click, fill, hover, waitFor, etc.)
+❌ Test file path (e.g., src/steps/login.steps.ts)
+❌ Error message (available in request but NOT passed to AIHealer)
+
+Phase 3: Vision-Based Healing (resolveVision → AIHealer.healWithVision())
+Currently sent to LLM:
+
+✅ Screenshot (full page PNG)
+✅ Page URL
+✅ Broken selector
+⚠️ Element description (only 6 of 15 fingerprint fields: tag, text, aria-label, type, placeholder, class)
+❌ Stored fingerprint from server — vision endpoint uses fingerprint || { tagName: 'unknown' } from request, NOT the rich stored fingerprint from the DB
+❌ Test/step/scenario context (same as AI)
+❌ Action type (same as AI)
+❌ Error message (not even accepted by /api/heal/vision)
+
+
+Implementation Plan
+Step 1: Extend Types — Add context fields to request schemas
+File: src/types/healing.ts
+Add optional context fields to HealResolveRequestSchema:
+typescriptexport const HealResolveRequestSchema = z.object({
+  // ... existing fields ...
+  // NEW: Test context for improved AI healing
+  testContext: z.object({
+    testName: z.string().optional(),
+    stepName: z.string().optional(),
+    scenarioName: z.string().optional(),
+    testFilePath: z.string().optional(),
+    actionType: z.string().optional(),   // 'click' | 'fill' | 'hover' | 'waitFor' | etc.
+  }).optional(),
+});
+All fields optional — backwards compatible. Adapters that don't have this info still work fine.
+Step 2: Enhance AIHealer — Accept and use test context
+File: src/healing/ai-healer.ts
+2A. Add TestContext interface + update heal() signature
+typescriptexport interface HealingTestContext {
+  testName?: string;
+  stepName?: string;
+  scenarioName?: string;
+  testFilePath?: string;
+  actionType?: string;
+  errorMessage?: string;
+}
+
+async heal(
+  originalSelector: string,
+  fingerprint: ElementFingerprint,
+  domSnapshot?: string,
+  snapshotScope?: 'full' | 'section' | 'minimal',
+  testContext?: HealingTestContext,          // NEW
+): Promise<AIHealResult | null>
+```
+
+#### 2B. Enhance LLM prompts with context
+
+**Text-based system prompt** — add rule about action context:
+```
+- If the action is "fill" or "type", prefer input/textarea selectors
+- If the action is "click", prefer button/a/clickable element selectors
+- Consider the test context to understand what element is expected
+```
+
+**Text-based user prompt** — append test context section:
+```
+${testContext?.actionType ? `\nAction being performed: ${testContext.actionType}` : ''}
+${testContext?.testName ? `\nTest: ${testContext.testName}` : ''}
+${testContext?.stepName ? `\nStep: ${testContext.stepName}` : ''}
+${testContext?.errorMessage ? `\nError: ${testContext.errorMessage.slice(0, 200)}` : ''}
+2C. Enhance healWithVision() similarly
+typescriptasync healWithVision(
+  originalSelector: string,
+  fingerprint: ElementFingerprint,
+  screenshotBase64: string,
+  pageUrl: string,
+  testContext?: HealingTestContext,          // NEW
+): Promise<VisionHealResult | null>
+```
+
+Add to vision user prompt:
+```
+${testContext?.actionType ? `\nThe test was trying to: ${testContext.actionType} this element` : ''}
+${testContext?.stepName ? `\nTest step: ${testContext.stepName}` : ''}
+Use all fingerprint fields for elementDesc (currently only 6 of 15):
+typescriptconst elementDesc = [
+  `Tag: ${fingerprint.tagName}`,
+  fingerprint.id ? `id: "${fingerprint.id}"` : '',
+  fingerprint.testId ? `data-testid: "${fingerprint.testId}"` : '',
+  fingerprint.textContent ? `Text: "${fingerprint.textContent.slice(0, 60)}"` : '',
+  fingerprint.ariaLabel ? `aria-label: "${fingerprint.ariaLabel}"` : '',
+  fingerprint.ariaRole ? `role: "${fingerprint.ariaRole}"` : '',
+  fingerprint.name ? `name: "${fingerprint.name}"` : '',
+  fingerprint.type ? `type: ${fingerprint.type}` : '',
+  fingerprint.placeholder ? `placeholder: "${fingerprint.placeholder}"` : '',
+  fingerprint.className ? `classes: ${fingerprint.className}` : '',
+  fingerprint.href ? `href: ${fingerprint.href}` : '',
+  fingerprint.parentTag ? `parent: ${fingerprint.parentTag}` : '',
+].filter(Boolean).join(', ');
+Step 3: Update Server — Pass context to AIHealer + use stored fingerprint for vision
+File: src/ui/routes/api-healing-universal.ts
+3A. /api/heal/resolve — pass test context and errorMessage to AIHealer
+typescript// Extract testContext from body
+const testContext = body.testContext as { testName?: string; stepName?: string; ... } | undefined;
+
+// In requestAI path:
+const aiResult = await aiHealer.heal(
+  selector, stored.fingerprint, domSnapshot, 'section',
+  { ...testContext, errorMessage }   // NEW: pass context
+);
+3B. /api/heal/vision — accept errorMessage, use stored fingerprint from DB, pass context
+typescript// Accept new fields
+const { selector, fingerprint, screenshotBase64, pageUrl, framework, language, errorMessage, testContext } = req.body;
+
+// Look up stored fingerprint from DB (richer than what client sends)
+const selectorKey = `css:${selector}`;
+const stored = healingStore.get(selectorKey) || healingStore.findSimilar(selectorKey, pageUrl);
+const fp = stored?.fingerprint || fingerprint || { tagName: 'unknown' };
+
+const result = await aiHealer.healWithVision(
+  selector, fp, screenshotBase64, pageUrl,
+  { ...testContext, errorMessage }   // NEW: pass context
+);
+Step 4: Update Reference Adapter (Playwright Cucumber TS) — Send context from hooks
+File: src/healing/adapters/playwright-cucumber-ts.ts
+4A. Update resolveAI() and resolveVision() in healing-client template to accept testContext
+typescriptasync resolveAI(selector, pageUrl, errorMessage?, testContext?): Promise<HealResult | null> {
+  body: JSON.stringify({
+    // ...existing fields...
+    testContext,         // NEW
+  }),
+}
+
+async resolveVision(selector, pageUrl, screenshotBase64, testContext?): Promise<HealResult | null> {
+  body: JSON.stringify({
+    // ...existing fields...
+    errorMessage: testContext?.errorMessage,   // NEW: vision now accepts error
+    testContext,                                // NEW
+  }),
+}
+4B. Update healing-hooks template — capture and pass action context
+In wrapLocatorActions(), the methodName is already available (it's the loop variable: 'click', 'fill', etc.). Pass it as actionType:
+typescript// In the catch block of each wrapped action method:
+const testContext = {
+  actionType: methodName,    // 'click', 'fill', 'hover', etc. — ALREADY AVAILABLE
+  // testName/stepName: available via Cucumber world (this.pickle?.name)
+};
+
+const aiResult = await client.resolveAI(selector, page.url(), errMsg, testContext);
+// ...
+const visionResult = await client.resolveVision(selector, page.url(), screenshotBase64, testContext);
+For Cucumber specifically, step/scenario context is available from the world object:
+typescript// In BeforeStep hook, capture current step info from Cucumber world
+const world = this as any;
+const currentScenario = world.pickle?.name;
+const currentStep = world.__qabotCurrentStep;  // Set this in BeforeStep
+Step 5: Update ALL other 9 adapter templates — Send context per framework
+Each adapter sends what context it can capture:
+AdapteractionTypetestNamestepNameNotesplaywright-ts❌ (no hook wrapping)❌❌Wrapped at driver level, no test metadataplaywright-cucumber-ts✅ methodName✅ pickle.name✅ from BeforeStepFull context availablecypress-ts✅ from command name✅ Cypress.currentTest.title❌Cypress exposes test titlewebdriverio-ts✅ from command name❌❌WDIO service has command nameselenium-java❌❌❌No test metadata at driver levelselenium-python❌❌❌No test metadata at driver levelselenium-csharp❌❌❌No test metadata at driver levelappium-java❌❌❌No test metadata at driver levelrobot-framework✅ from keyword name✅ BuiltIn().get_variable_value('${TEST NAME}')✅ keyword nameRobot exposes test metadata
+For adapters without test metadata, just send testContext: { actionType } when available, or omit entirely. The fields are all optional.
+Step 6: Regenerate user project hooks
+Update the flipkart-playwright-cucumber project hooks to pass context.
+Step 7: Build + Verify
+
+Files to Modify
+FileChangesrc/types/healing.tsAdd testContext to HealResolveRequestSchemasrc/healing/ai-healer.tsAdd HealingTestContext, update heal() + healWithVision() promptssrc/ui/routes/api-healing-universal.tsPass testContext to AIHealer, use stored fingerprint in visionsrc/healing/adapters/playwright-cucumber-ts.tsPass actionType + step/scenario from Cucumber worldsrc/healing/adapters/playwright-ts.tsPass testContext to resolveAI/resolveVisionsrc/healing/adapters/cypress-ts.tsPass Cypress.currentTest.title as testNamesrc/healing/adapters/webdriverio-ts.tsPass command name as actionTypesrc/healing/adapters/selenium-java.tsAdd testContext param (optional)src/healing/adapters/selenium-python.tsAdd testContext param (optional)src/healing/adapters/selenium-csharp.tsAdd testContext param (optional)src/healing/adapters/appium-java.tsAdd testContext param (optional)src/healing/adapters/robot-framework.tsPass ${TEST NAME} + keyword nameUser hooks: healing-client.ts, healing-hooks.tsPass context from Cucumber world
+Verification
+
+pnpm build succeeds
+Grep: testContext in all adapter resolveAI/resolveVision calls
+Grep: actionType in AIHealer prompts
+Grep: stored fingerprint used in /api/heal/vision (not just request fingerprint)
+Grep: errorMessage used in AIHealer text prompt
+Read ai-healer.ts prompts to confirm context is included in LLM messages

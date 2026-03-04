@@ -1,0 +1,419 @@
+I've completed a comprehensive analysis of the Git Integration feature. Here's a summary of what I've proposed:
+
+6 Features Analyzed
+Git Blame for Test Files — Show who last modified a failing test and who authored the specific failing line. Integrates into TestDetailPanel and FailureAnalysis.
+
+Commit-Failure Correlation — Automatically detect "these tests started failing after commit X" by storing commitSha per run and cross-referencing changed files with stack traces. High/medium/low confidence scoring.
+
+Test File History & Churn — Timeline of commits per test file + churn score. High-churn files correlate with flakiness.
+
+Auto-Assignment — Suggest failure owners based on blame data (stack trace line author > test file author > source file author > most frequent contributor).
+
+Git Diff Viewer — Show actual code changes for correlated commits, reusing the existing DiffViewer component.
+
+Branch & Status Awareness — Track current branch and uncommitted changes per run; enable branch-level filtering.
+
+Architecture
+Backend: New GitService (using simple-git), SQLite cache store, REST API routes
+Frontend: 5 new components + modifications to 4 existing components
+Graceful degradation for non-git projects
+3-phase implementation prioritized by effort/impact
+The full analysis with data models, UI mockups, API endpoints, caching strategy, and file-level change inventory is in the plan file.
+
+
+Analyzed and approved git integration feature plan for blame/history/commit linking
+Analyzed and approved git integration feature plan for blame/history/commit linking
+
+The user approved the plan. Since the user's original request was explicitly "do not implement now, just provide your analysis", this was an analysis-only task. The plan file now serves as a comprehensive feature specification document.
+
+Here's a quick recap of the analysis delivered:
+
+Git Integration Analysis — Complete
+6 features proposed, organized into 3 implementation phases:
+
+Phase	Features	Effort
+Phase 1	Git Status/Branch Awareness + Git Blame for Test Files	Foundation — GitService, cache, blame in TestDetailPanel
+Phase 2	Commit-Failure Correlation + Auto-Assignment	Intelligence — "what commit broke this?" + "who should fix it?"
+Phase 3	File History/Churn + Diff Viewer	Depth — stability analysis, inline diffs
+Architecture: 3 new backend files (service, cache store, routes) + 5 new frontend components + 7 modified existing files. Uses simple-git package + existing better-sqlite3 for caching. All git features gracefully degrade when git is unavailable.
+
+Key integration points: TestDetailPanel (blame + ownership), FailureAnalysis (commit correlation + suggested owner), RunnerPanel (branch badge), ResultsPage (branch filter + new failures header).
+
+Let me know when you're ready to start implementing any of these phases!...
+
+
+======
+plan
+========
+
+Context
+The qabot UI dashboard has zero git integration. Test results capture file paths, errors, and stack traces but have no connection to version control. When a test fails, there's no way to know who last modified the file, which commit introduced the failure, or how the file has evolved. This feature adds 6 git-powered capabilities across 3 phases.
+
+Phase 1: Foundation — Git Service + Status + Blame
+Step 1: Install simple-git
+bashpnpm add simple-git
+Step 2: Create src/ui/services/git-service.ts (NEW)
+Core git operations service using simple-git. Constructor takes projectPath.
+
+isAvailable(): boolean — checks git rev-parse --is-inside-work-tree
+getStatus() — returns { branch, isClean, lastCommit: { sha, shortSha, author, email, message, timestamp }, uncommittedChanges[], aheadBehind }
+blame(filePath) — parses git blame --porcelain into GitBlameEntry[] + summary (lastModifiedBy, lastModifiedAt, lastCommitSha, lastCommitMessage)
+getFileHistory(filePath, limit=20) — git log --follow --stat → commit array
+getRecentCommits(limit=20) — git log with --name-only → commits with changed files
+getCommitDiff(sha) — git diff sha~1..sha → file diffs
+getCommitsBetween(fromSha, toSha) — git log fromSha..toSha with --name-only
+getChurnScore(filePath, days=30) — count modifications in time window
+
+All methods are async, use simpleGit(projectPath), and have try/catch returning null/empty on failure.
+Step 3: Create src/ui/store/git-cache-store.ts (NEW)
+SQLite cache using better-sqlite3 (already a dependency). File: ~/.qabot/git-cache.db.
+sqlCREATE TABLE IF NOT EXISTS blame_cache (
+  file_path TEXT NOT NULL,
+  head_sha TEXT NOT NULL,
+  blame_data TEXT NOT NULL,  -- JSON
+  cached_at INTEGER NOT NULL,
+  PRIMARY KEY (file_path, head_sha)
+);
+CREATE TABLE IF NOT EXISTS status_cache (
+  key TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  cached_at INTEGER NOT NULL
+);
+Methods: getBlame(filePath, headSha), setBlame(filePath, headSha, data), getStatus(), setStatus(data), invalidateFile(filePath), pruneOld(maxAgeMs).
+TTL: 5 min for status, 30 min for blame.
+Pattern: follows src/healing/store.ts constructor — getQabotDir(), mkdirSync, new Database(path), initialize().
+Step 4: Add git types to src/ui/types.ts
+Insert after CloudArtifactsSchema (line 229), before StoredRunSchema (line 231):
+typescript// ── Git Integration ──────────────────────────────────────────────────────────
+
+export const GitBlameEntrySchema = z.object({
+  line: z.number(),
+  author: z.string(),
+  email: z.string(),
+  commitSha: z.string(),
+  commitMessage: z.string(),
+  timestamp: z.string(),
+});
+export type GitBlameEntry = z.infer<typeof GitBlameEntrySchema>;
+
+export const GitBlameResultSchema = z.object({
+  filePath: z.string(),
+  entries: z.array(GitBlameEntrySchema),
+  lastModifiedBy: z.string(),
+  lastModifiedAt: z.string(),
+  lastCommitSha: z.string(),
+  lastCommitMessage: z.string(),
+});
+export type GitBlameResult = z.infer<typeof GitBlameResultSchema>;
+
+export const GitCommitSchema = z.object({
+  sha: z.string(),
+  shortSha: z.string(),
+  author: z.string(),
+  email: z.string(),
+  message: z.string(),
+  timestamp: z.string(),
+  filesChanged: z.array(z.string()).optional(),
+});
+export type GitCommit = z.infer<typeof GitCommitSchema>;
+
+export const GitStatusSchema = z.object({
+  available: z.boolean(),
+  branch: z.string().optional(),
+  isClean: z.boolean().optional(),
+  lastCommit: GitCommitSchema.optional(),
+  uncommittedChanges: z.array(z.object({
+    path: z.string(),
+    status: z.enum(['modified', 'added', 'deleted', 'untracked', 'renamed']),
+  })).optional(),
+  ahead: z.number().optional(),
+  behind: z.number().optional(),
+});
+export type GitStatus = z.infer<typeof GitStatusSchema>;
+Add to StoredRunSchema after cloudArtifacts (line 254):
+typescript  // Git metadata
+  gitCommitSha: z.string().optional(),
+  gitBranch: z.string().optional(),
+  gitAuthor: z.string().optional(),
+  gitCommitMessage: z.string().optional(),
+Step 5: Create src/ui/routes/api-git.ts (NEW)
+Route function: export function mountGitRoutes(app: Express, gitService: GitService, gitCache: GitCacheStore): void
+Endpoints:
+
+GET /api/git/status → gitService.getStatus() (cached 5 min)
+GET /api/git/blame (query: file) → gitService.blame(file) (cached 30 min by headSha)
+GET /api/git/log (query: limit, file) → gitService.getRecentCommits() or gitService.getFileHistory()
+GET /api/git/diff/:sha → gitService.getCommitDiff(sha)
+
+Error handling: if !gitService.isAvailable(), return { available: false } with 200 status.
+Step 6: Mount in src/ui/server.ts
+Add imports after line 14:
+typescriptimport { GitService } from './services/git-service.js';
+import { GitCacheStore } from './store/git-cache-store.js';
+Add instantiation after line 50 (after scheduler):
+typescriptconst gitService = new GitService(options.projectPath);
+const gitCacheStore = new GitCacheStore(options.projectPath);
+Add route import after line 111:
+typescriptconst { mountGitRoutes } = await import('./routes/api-git.js');
+Add route mount after line 130:
+typescriptmountGitRoutes(app, gitService, gitCacheStore);
+Step 7: Capture git metadata in runner (src/ui/routes/api-runner.ts)
+The mountRunnerRoutes function signature needs gitService added as parameter.
+Before building storedRun (line 199), capture git info:
+typescriptlet gitCommitSha: string | undefined;
+let gitBranch: string | undefined;
+let gitAuthor: string | undefined;
+let gitCommitMessage: string | undefined;
+try {
+  if (gitService?.isAvailable()) {
+    const status = await gitService.getStatus();
+    gitBranch = status?.branch;
+    if (status?.lastCommit) {
+      gitCommitSha = status.lastCommit.shortSha;
+      gitAuthor = status.lastCommit.author;
+      gitCommitMessage = status.lastCommit.message;
+    }
+  }
+} catch { /* ignore git errors */ }
+Add fields to storedRun object (after line 214):
+typescriptgitCommitSha,
+gitBranch,
+gitAuthor,
+gitCommitMessage,
+Update mountRunnerRoutes call in server.ts to pass gitService.
+Step 8: Frontend — API client (ui-app/src/api/client.ts)
+Add git API functions:
+typescriptexport const getGitStatus = () =>
+  request<GitStatus>('/api/git/status');
+
+export const getGitBlame = (filePath: string) =>
+  request<GitBlameResult>(`/api/git/blame?file=${encodeURIComponent(filePath)}`);
+
+export const getGitLog = (limit = 20, file?: string) =>
+  request<{ commits: GitCommit[] }>(`/api/git/log?limit=${limit}${file ? `&file=${encodeURIComponent(file)}` : ''}`);
+
+export const getGitDiff = (sha: string) =>
+  request<{ sha: string; files: Array<{ path: string; status: string; additions: number; deletions: number; patch?: string }> }>(`/api/git/diff/${sha}`);
+Step 9: Frontend — ui-app/src/hooks/useGit.ts (NEW)
+typescriptexport function useGitStatus() {
+  return useQuery({ queryKey: ['git-status'], queryFn: getGitStatus, refetchInterval: 30000 });
+}
+
+export function useGitBlame(filePath: string | null) {
+  return useQuery({ queryKey: ['git-blame', filePath], queryFn: () => getGitBlame(filePath!), enabled: !!filePath });
+}
+
+export function useGitLog(limit = 20, file?: string) {
+  return useQuery({ queryKey: ['git-log', limit, file], queryFn: () => getGitLog(limit, file), enabled: true });
+}
+Step 10: Frontend — TestDetailPanel git blame section
+File: ui-app/src/components/results/TestDetailPanel.tsx
+Add import: useGitBlame from ../../hooks/useGit, GitBranch, User from lucide-react
+Inside component, after const humanSteps = ... (line 64), add:
+typescriptconst { data: blameData } = useGitBlame(test?.file || null);
+After file path display (line 90), insert git blame info:
+tsx{blameData?.lastModifiedBy && (
+  <div className="flex items-center gap-1.5 mt-1 text-[11px] text-gray-500">
+    <User size={10} className="text-gray-600" />
+    <span>{blameData.lastModifiedBy}</span>
+    <span className="text-gray-700">•</span>
+    <span>{formatRelativeTime(blameData.lastModifiedAt)}</span>
+    <span className="text-gray-700">•</span>
+    <span className="font-mono text-sky-400/70">{blameData.lastCommitSha?.slice(0, 7)}</span>
+  </div>
+)}
+Add a formatRelativeTime(isoDate) helper function at bottom of file.
+Step 11: Frontend — ResultsPage git badges
+File: ui-app/src/components/results/ResultsPage.tsx
+In the run info section (around line 169), after cloudBuildName, add git branch + commit badges:
+tsx{runDetail?.gitBranch && (
+  <span className="flex items-center gap-1 text-[11px] text-sky-400/70 flex-shrink-0">
+    <GitBranch size={10} />
+    {runDetail.gitBranch}
+  </span>
+)}
+{runDetail?.gitCommitSha && (
+  <span className="flex items-center gap-1 text-[11px] text-gray-500 font-mono flex-shrink-0">
+    <GitCommitHorizontal size={10} />
+    {runDetail.gitCommitSha}
+    {runDetail.gitCommitMessage && (
+      <span className="text-gray-600 font-sans truncate max-w-48">— {runDetail.gitCommitMessage}</span>
+    )}
+  </span>
+)}
+Import GitBranch, GitCommitHorizontal from lucide-react.
+Step 12: Frontend — RunnerPanel git status
+File: ui-app/src/components/runner/RunnerPanel.tsx
+Add useGitStatus hook. In status info area (after framework display), show:
+tsx{gitStatus?.branch && (
+  <span className="text-xs text-gray-500">
+    Branch: <span className="text-sky-400/70">{gitStatus.branch}</span>
+  </span>
+)}
+
+Phase 2: Commit Correlation + Auto-Assignment
+Step 13: Add correlation methods to GitService
+Add to src/ui/services/git-service.ts:
+typescriptasync correlateFailures(currentRun: StoredRun, previousRun: StoredRun | null): Promise<CommitCorrelation[]>
+Logic:
+
+Get commits between previousRun.gitCommitSha and currentRun.gitCommitSha
+For each new failure (test failed in current but passed in previous):
+
+Check if any commit modified the test file → confidence high
+Check if any commit modified a file in the stack trace → confidence medium
+Otherwise temporal correlation → confidence low
+
+
+Return array of CommitCorrelation objects
+
+Step 14: Add ownership methods to GitService
+typescriptasync getFailureOwnership(test: StoredTestCase, projectPath: string): Promise<FailureOwnership>
+Logic:
+
+Extract file:line from test.stackTrace using regex
+git blame the failing line → primary owner
+git blame the test file → secondary owner (last modifier)
+Return { suggestedOwner, alternativeOwners, confidence, reason }
+
+Step 15: Add correlation types to src/ui/types.ts
+typescriptexport const CommitCorrelationSchema = z.object({
+  commit: GitCommitSchema,
+  newFailures: z.array(z.string()),
+  fixedTests: z.array(z.string()),
+  confidence: z.enum(['high', 'medium', 'low']),
+  reason: z.string(),
+});
+
+export const FailureOwnershipSchema = z.object({
+  testName: z.string(),
+  suggestedOwner: z.object({
+    name: z.string(),
+    email: z.string(),
+    reason: z.string(),
+    confidence: z.enum(['high', 'medium', 'low']),
+  }),
+  alternativeOwners: z.array(z.object({
+    name: z.string(),
+    email: z.string(),
+    reason: z.string(),
+  })),
+});
+Step 16: Add correlation API endpoints to api-git.ts
+
+GET /api/git/correlate/:runId — needs resultsStore to look up current + previous run
+GET /api/git/ownership/:runId — blame failing lines for all failed tests
+
+Update mountGitRoutes signature to accept resultsStore too.
+Step 17: Frontend — client.ts + useGit.ts additions
+typescriptexport const getGitCorrelation = (runId: string) =>
+  request<{ correlations: CommitCorrelation[] }>(`/api/git/correlate/${runId}`);
+
+export const getGitOwnership = (runId: string) =>
+  request<{ ownership: FailureOwnership[] }>(`/api/git/ownership/${runId}`);
+Hooks:
+typescriptexport function useGitCorrelation(runId: string | null) { ... }
+export function useGitOwnership(runId: string | null) { ... }
+Step 18: Frontend — FailureAnalysis enhancement
+File: ui-app/src/components/results/FailureAnalysis.tsx
+The component receives runId via props. Add useGitOwnership(runId) hook.
+In the affected tests list (around line 1046), enhance each test item:
+
+Look up ownership data for the test name
+Show author name + confidence badge next to test name
+Pattern: <span className="text-[11px] text-gray-600"><User size={9}/> {owner.name}</span>
+
+Step 19: Frontend — ResultsPage correlation banner
+File: ui-app/src/components/results/ResultsPage.tsx
+Add useGitCorrelation(selectedRunId) hook.
+After run detail header, if correlations exist with high confidence, show:
+tsx<div className="mx-6 mt-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
+  <GitCommitHorizontal size={12} className="inline mr-1.5" />
+  {highConfCorrelations.length} failure(s) likely introduced by commit <code>{commit.shortSha}</code> by {commit.author}
+</div>
+
+Phase 3: File History + Churn + Diff + Git Page
+Step 20: Add API endpoints for history/churn
+In api-git.ts:
+
+GET /api/git/file-history (query: file, limit) → commit history for specific file
+GET /api/git/churn (query: file) → { editCount, daysSpan, churnScore, contributors }
+
+Step 21: Frontend — TestDetailPanel git history section
+After run history squares (line 277), before AI Fix button (line 279):
+tsx{blameData && fileHistory?.commits?.length > 0 && (
+  <div>
+    <p className="text-[11px] font-semibold text-gray-400 uppercase mb-2">Git History</p>
+    <div className="space-y-1">
+      {fileHistory.commits.slice(0, 5).map(c => (
+        <div key={c.sha} className="flex items-center gap-2 text-[11px]">
+          <span className="font-mono text-sky-400/60 w-14 flex-shrink-0">{c.shortSha}</span>
+          <span className="text-gray-400 truncate flex-1">{c.message}</span>
+          <span className="text-gray-600 flex-shrink-0">{formatRelativeTime(c.timestamp)}</span>
+        </div>
+      ))}
+    </div>
+    {churnData?.churnScore > 5 && (
+      <div className="mt-2 flex items-center gap-1.5 text-[11px] text-amber-400/80">
+        <AlertTriangle size={10} /> Modified {churnData.editCount} times in 30 days (high churn)
+      </div>
+    )}
+  </div>
+)}
+Add useGitLog and a new useGitChurn hook call.
+Step 22: Frontend — CommitDiffViewer component
+File: ui-app/src/components/results/CommitDiffViewer.tsx (NEW)
+Small component that takes a commit SHA, fetches diff via getGitDiff(sha), and renders using the existing DiffViewer pattern from ui-app/src/components/ai/NewTestPanel.tsx.
+Step 23: Frontend — GitPage component
+File: ui-app/src/components/git/GitPage.tsx (NEW)
+Standalone page showing:
+
+Git status card (branch, clean/dirty, last commit, ahead/behind)
+Recent commits list with expandable diffs (using CommitDiffViewer)
+File churn leaderboard (top 10 most-modified test files)
+Commit-failure correlation overview across all recent runs
+
+Step 24: Add route and sidebar link
+App.tsx — Add route: <Route path="git" element={<GitPage />} />
+DynamicSidebar.tsx — Add link before AI Assistant:
+tsx<SidebarLink to="/git" icon={<GitBranch size={18} />} label="Git" collapsed={collapsed} />
+Import GitBranch from lucide-react.
+
+Files Summary
+New Files (8)
+FilePurposesrc/ui/services/git-service.tsCore git operations via simple-gitsrc/ui/store/git-cache-store.tsSQLite blame/status cachesrc/ui/routes/api-git.tsREST API endpointsui-app/src/hooks/useGit.tsTanStack Query hooksui-app/src/components/git/GitPage.tsxStandalone git dashboard pageui-app/src/components/results/CommitDiffViewer.tsxCommit diff display
+Modified Files (8)
+FileChangessrc/ui/types.tsAdd git types + git fields to StoredRunsrc/ui/server.tsInstantiate GitService + GitCacheStore, mount routessrc/ui/routes/api-runner.tsCapture git metadata per runui-app/src/api/client.tsAdd git API functionsui-app/src/App.tsxAdd /git routeui-app/src/components/layout/DynamicSidebar.tsxAdd Git sidebar linkui-app/src/components/results/TestDetailPanel.tsxAdd blame + history sectionsui-app/src/components/results/ResultsPage.tsxAdd branch/commit badges + correlation bannerui-app/src/components/results/FailureAnalysis.tsxAdd ownership to affected testsui-app/src/components/runner/RunnerPanel.tsxShow current branch
+
+Verification
+
+pnpm add simple-git succeeds
+pnpm run build:ui && pnpm build passes with no errors
+Start dashboard (/buildUI) → Git sidebar link appears
+/git page shows current branch, recent commits, status
+Run tests → stored run includes gitCommitSha and gitBranch
+/results → run detail shows branch badge + commit badge
+Select a failed test → TestDetailPanel shows "Last modified by..." blame info
+TestDetailPanel shows Git History section with recent commits
+High-churn files show amber warning
+FailureAnalysis affected tests show suggested owner
+Correlation banner appears when failures correlate with commits
+Non-git projects show no git sections (graceful degradation)
+
+====================================================================
+
+Verification
+
+pnpm build — backend builds with no errors
+pnpm run build:ui — frontend builds with no errors
+Git page shows operations toolbar with Fetch/Pull/Push buttons
+Branch dropdown lists local branches, switching works
+New Branch creates and switches to a new branch
+Uncommitted files have Stage/Unstage buttons per file
+Stage All / Unstage All moves all files between groups
+Enter commit message + click Commit → creates git commit, toast shows success
+After commit: uncommitted changes clear, new commit appears in history
+Fetch/Pull/Push show loading state and toast results
+Push with no remote → shows appropriate error
+All operations refresh git status/log automatically via query invalidation
+
