@@ -29,6 +29,41 @@ export function mountRecorderRoutes(
   const { orchestrator, browserManager } = options;
   const projectPath = options.projectPath;
 
+  // ── Disconnect listener: auto-stop recording if browser closes externally ──
+  browserManager.onDisconnect(() => {
+    if (!activeRecorder || !activeRecorder.isRecording()) return;
+
+    logger.info('Browser disconnected during recording — auto-stopping recorder');
+
+    // Collect whatever was recorded so far. stop() should be fast since
+    // ownsBrowser=false (recorder reuses the shared browser, won't try to close it).
+    activeRecorder.stop().then((session) => {
+      lastSession = session;
+      activeRecorder = null;
+
+      broadcast(wss, {
+        type: 'recorder-status',
+        status: 'stopped',
+        sessionId: session.id,
+        actionCount: session.actions.length,
+        duration: session.duration || 0,
+      });
+
+      logger.info(`Recording auto-stopped on browser disconnect: ${session.actions.length} actions captured`);
+    }).catch((err) => {
+      // If stop() fails (browser dead / state inconsistent), force-clear the recorder
+      logger.info(`Recorder stop() failed on disconnect: ${err} — force-clearing`);
+      activeRecorder = null;
+
+      broadcast(wss, {
+        type: 'recorder-status',
+        status: 'stopped',
+        actionCount: 0,
+        duration: 0,
+      });
+    });
+  });
+
   // ── POST /api/recorder/start — Start a recording session ────────────────
   app.post('/api/recorder/start', async (req, res) => {
     try {
@@ -100,6 +135,9 @@ export function mountRecorderRoutes(
         sessionId,
         url: url || undefined,
       });
+
+      // Broadcast browser-launched so LiveBrowserWrapper in any tab can detect it
+      broadcast(wss, { type: 'browser-launched', url: url || '' });
 
       logger.info(`Recording started: ${sessionId}`);
       audit(req, 'recorder.start', { resourceType: 'recorder', resourceId: sessionId });

@@ -10,12 +10,52 @@ const logger = createLogger('browser-manager');
  * BrowserManager wraps the adapter and provides a simplified API
  * that browser tools use. It manages the active session lifecycle.
  */
+export type TabSwitchCallback = (index: number) => void | Promise<void>;
+export type DisconnectCallback = () => void | Promise<void>;
+
 export class BrowserManager {
   private adapter: PlaywrightAdapter;
   private activeSession: BrowserSession | null = null;
+  private tabSwitchCallbacks: TabSwitchCallback[] = [];
+  private disconnectCallbacks: DisconnectCallback[] = [];
+  private isClosingProgrammatically = false;
 
   constructor() {
     this.adapter = new PlaywrightAdapter();
+  }
+
+  /** Register a callback invoked whenever the active tab changes (tool switch, new tab, auto-detected popup). */
+  onTabSwitch(cb: TabSwitchCallback): () => void {
+    this.tabSwitchCallbacks.push(cb);
+    return () => {
+      this.tabSwitchCallbacks = this.tabSwitchCallbacks.filter(c => c !== cb);
+    };
+  }
+
+  /** Register a callback invoked when the browser disconnects (user closed window externally). */
+  onDisconnect(cb: DisconnectCallback): () => void {
+    this.disconnectCallbacks.push(cb);
+    return () => {
+      this.disconnectCallbacks = this.disconnectCallbacks.filter(c => c !== cb);
+    };
+  }
+
+  private notifyTabSwitch(index: number): void {
+    for (const cb of this.tabSwitchCallbacks) {
+      try { cb(index); } catch { /* ignore callback errors */ }
+    }
+  }
+
+  private notifyDisconnect(): void {
+    logger.info(`Notifying ${this.disconnectCallbacks.length} disconnect listener(s)`);
+    for (const cb of this.disconnectCallbacks) {
+      try {
+        cb();
+        logger.info('Disconnect listener callback executed');
+      } catch (err) {
+        logger.info(`Disconnect listener callback error: ${err}`);
+      }
+    }
   }
 
   async launch(options?: Partial<SessionOptions>): Promise<BrowserSession> {
@@ -33,6 +73,24 @@ export class BrowserManager {
       timeout: options?.timeout || config.timeout,
       slowMo: options?.slowMo || config.slowMo,
       ...options,
+    });
+
+    // Listen for auto-detected new tabs (popups, window.open, target=_blank)
+    this.adapter.onNewPage((idx) => {
+      logger.info(`New tab auto-detected (index ${idx}), notifying listeners`);
+      this.notifyTabSwitch(idx);
+    });
+
+    // Listen for external browser disconnect (user closed the browser window)
+    // Guard: only notify for genuinely external disconnects, not our own close()
+    this.adapter.onDisconnect(() => {
+      if (this.isClosingProgrammatically) {
+        logger.info('Browser disconnected (programmatic close — skipping notification)');
+        return;
+      }
+      logger.info('Browser externally disconnected, clearing active session');
+      this.activeSession = null;
+      this.notifyDisconnect();
     });
 
     return this.activeSession;
@@ -124,8 +182,13 @@ export class BrowserManager {
 
   async close(): Promise<void> {
     if (this.activeSession) {
-      await this.adapter.closeSession();
-      this.activeSession = null;
+      this.isClosingProgrammatically = true;
+      try {
+        await this.adapter.closeSession();
+      } finally {
+        this.isClosingProgrammatically = false;
+        this.activeSession = null;
+      }
     }
   }
 
@@ -147,16 +210,23 @@ export class BrowserManager {
   switchTab(index: number): void {
     if (!this.activeSession) throw new Error('No active session');
     this.adapter.switchTab(index);
+    this.notifyTabSwitch(index);
   }
 
   async newTab(url?: string, switchTo?: boolean): Promise<number> {
     await this.ensureSession();
-    return this.adapter.newTab(url, switchTo);
+    const idx = await this.adapter.newTab(url, switchTo);
+    if (switchTo !== false) {
+      this.notifyTabSwitch(idx);
+    }
+    return idx;
   }
 
   async closeTab(index?: number): Promise<void> {
     await this.ensureSession();
-    return this.adapter.closeTab(index);
+    await this.adapter.closeTab(index);
+    // After closing, notify about the now-active tab
+    this.notifyTabSwitch(this.adapter.getActivePageIndex());
   }
 
   // ── Frame/IFrame Management ─────────────────────────────────────────────────

@@ -14,6 +14,7 @@ import {
   type ScopedStreamState,
   type ToolEvent,
 } from '../results/FailureAnalysis';
+import { LiveBrowserWrapper } from './LiveBrowserWrapper';
 
 // ── File Diff Types ──────────────────────────────────────────────────────────
 
@@ -350,6 +351,7 @@ export function NewTestPanel() {
   const verdict = getVerdict();
 
   return (
+    <LiveBrowserWrapper>
     <div className="flex flex-col h-full">
       {/* Form section — shown when idle */}
       {isIdle && (
@@ -564,5 +566,6 @@ export function NewTestPanel() {
         </div>
       )}
     </div>
+    </LiveBrowserWrapper>
   );
 }

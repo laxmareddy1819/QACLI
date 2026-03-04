@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { AIMarkdown } from '../results/FailureAnalysis';
 import type { WSMessage } from '../../api/types';
+import { LiveBrowserWrapper } from './LiveBrowserWrapper';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -556,6 +557,7 @@ export function ChatPanel() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
+    <LiveBrowserWrapper>
     <div className="flex h-full">
       {/* History Sidebar */}
       <div className={`flex-shrink-0 border-r border-white/5 bg-surface-1 transition-all duration-200 flex flex-col ${sidebarOpen ? 'w-64' : 'w-0'} overflow-hidden`}>
@@ -832,6 +834,7 @@ export function ChatPanel() {
         )}
       </div>
     </div>
+    </LiveBrowserWrapper>
   );
 }
 

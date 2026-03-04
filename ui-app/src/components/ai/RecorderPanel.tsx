@@ -26,6 +26,7 @@ import {
 } from '../results/FailureAnalysis';
 import { DiffViewer, type FileDiff } from './NewTestPanel';
 import type { WSMessage } from '../../api/types';
+import { LiveBrowserWrapper } from './LiveBrowserWrapper';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -234,6 +235,28 @@ export function RecorderPanel() {
         return;
       }
 
+      // Browser closed externally — stop recording UI if active
+      if (msg.type === 'browser-closed') {
+        setBrowserActive(false);
+        if (phase === 'recording') {
+          // Backend will send recorder-status:stopped, but ensure we show immediate feedback
+          setTimeline(prev => [...prev, {
+            kind: 'system',
+            id: uid(),
+            text: 'Browser closed — recording stopped',
+          }]);
+          setPhase('stopped');
+          setAssertActive(false);
+        }
+        return;
+      }
+
+      // Browser launched — update status
+      if (msg.type === 'browser-launched') {
+        setBrowserActive(true);
+        return;
+      }
+
       // Recorder status changes
       if (msg.type === 'recorder-status') {
         if (msg.status === 'recording') {
@@ -408,7 +431,7 @@ export function RecorderPanel() {
       }
     });
     return unsub;
-  }, [subscribe, currentRequestId, flushStreamText]);
+  }, [subscribe, currentRequestId, flushStreamText, phase]);
 
   // ── Start recording ──────────────────────────────────────────────────────
   const handleStart = async () => {
@@ -569,6 +592,7 @@ export function RecorderPanel() {
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
+    <LiveBrowserWrapper>
     <div className="h-full flex flex-col">
       {/* ── Header Bar ──────────────────────────────────────────────── */}
       <div className="flex-shrink-0 px-4 py-3 border-b border-white/5 bg-surface-1">
@@ -1016,5 +1040,6 @@ export function RecorderPanel() {
         </div>
       )}
     </div>
+    </LiveBrowserWrapper>
   );
 }

@@ -25,6 +25,42 @@ export function mountBrowserRoutes(
   const orchestrator = options.orchestrator;
   const browserManager = options.browserManager;
 
+  // ── Disconnect listener: browser closed externally → stop screencast + notify frontend
+  // IMPORTANT: Broadcast browser-closed FIRST, then cleanup. When the browser is
+  // externally closed, CDP session is dead — sending commands to it may hang.
+  browserManager.onDisconnect(() => {
+    console.log('[qabot] Browser disconnect callback in api-browser — broadcasting browser-closed to', wss.clients.size, 'client(s)');
+    // Notify frontend immediately (synchronous — no await needed)
+    broadcast(wss, { type: 'browser-closed' });
+    // Force-stop screencast without CDP commands (browser is already dead)
+    screencastService.forceStop();
+    console.log('[qabot] Browser disconnect handling complete');
+  });
+
+  // ── Tab switch listener: switch screencast + broadcast to frontend ─────────
+  browserManager.onTabSwitch(async (index: number) => {
+    try {
+      const page = browserManager.getPage();
+      if (page && screencastService.isActive()) {
+        await screencastService.switchPage(page);
+      }
+      // Broadcast updated tab state to all frontend clients
+      let tabs: Array<{ index: number; url: string; title: string; active: boolean }> = [];
+      let url = '';
+      let title = '';
+      try { tabs = await browserManager.listTabs(); } catch { /* ok */ }
+      try { url = await browserManager.getUrl(); } catch { /* ok */ }
+      try { title = await browserManager.getTitle(); } catch { /* ok */ }
+      broadcast(wss, {
+        type: 'browser-tab-switched',
+        index,
+        url,
+        title,
+        tabs,
+      });
+    } catch { /* ignore tab switch errors */ }
+  });
+
   // GET /api/browser/status — Get current browser session status
   app.get('/api/browser/status', async (_req, res) => {
     try {
@@ -44,6 +80,25 @@ export function mountBrowserRoutes(
       res.json({ active: true, url, title, tabs });
     } catch (error) {
       res.json({ active: false, error: String(error) });
+    }
+  });
+
+  // POST /api/browser/close — Close the browser session
+  app.post('/api/browser/close', async (_req, res) => {
+    try {
+      if (!browserManager.hasActiveSession()) {
+        res.json({ closed: false, message: 'No active browser session' });
+        return;
+      }
+      // Stop screencast first
+      if (screencastService.isActive()) {
+        await screencastService.stopScreencast();
+      }
+      await browserManager.close();
+      broadcast(wss, { type: 'browser-closed' });
+      res.json({ closed: true });
+    } catch (error) {
+      res.json({ closed: false, error: String(error) });
     }
   });
 
@@ -175,6 +230,13 @@ export function mountBrowserRoutes(
             clickCount: msg.clickCount || 1,
             modifiers: msg.modifiers || 0,
           });
+          // On mouseMoved, query cursor style and send back to the requesting client
+          if (msg.mouseType === 'mouseMoved') {
+            const cursor = await screencastService.getCursorAtPoint(msg.x, msg.y);
+            if (cursor) {
+              ws.send(JSON.stringify({ type: 'screencast-cursor', cursor }));
+            }
+          }
           return;
         }
 
@@ -211,15 +273,43 @@ export function mountBrowserRoutes(
           return;
         }
 
+        if (msg.type === 'screencast-go-back') {
+          if (!browserManager.hasActiveSession()) return;
+          try {
+            const page = browserManager.getPage();
+            if (page) await page.goBack({ waitUntil: 'domcontentloaded' }).catch(() => {});
+          } catch { /* ignore */ }
+          return;
+        }
+
+        if (msg.type === 'screencast-go-forward') {
+          if (!browserManager.hasActiveSession()) return;
+          try {
+            const page = browserManager.getPage();
+            if (page) await page.goForward({ waitUntil: 'domcontentloaded' }).catch(() => {});
+          } catch { /* ignore */ }
+          return;
+        }
+
+        // ── Close browser session from live view ─────────────────────────
+        if (msg.type === 'screencast-close-browser') {
+          try {
+            if (screencastService.isActive()) {
+              await screencastService.stopScreencast();
+            }
+            if (browserManager.hasActiveSession()) {
+              await browserManager.close();
+            }
+            broadcast(wss, { type: 'browser-closed' });
+          } catch { /* ignore */ }
+          return;
+        }
+
         if (msg.type === 'screencast-tab') {
           if (!browserManager.hasActiveSession()) return;
           try {
+            // switchTab triggers onTabSwitch callback which handles screencast switch + broadcast
             browserManager.switchTab(msg.index);
-            // Switch screencast to the new tab's page
-            const page = browserManager.getPage();
-            if (page && screencastService.isActive()) {
-              await screencastService.switchPage(page);
-            }
           } catch { /* ignore tab errors */ }
           return;
         }
@@ -288,50 +378,6 @@ export function mountBrowserRoutes(
         if (msg.type === 'screencast-resume') {
           orchestrator.resume();
           broadcast(wss, { type: 'ai-orchestrator-resumed' });
-          return;
-        }
-
-        // ── Phase 3: Point & Instruct — send user instruction from canvas ───
-
-        if (msg.type === 'screencast-instruct') {
-          const instruction = msg.instruction as string;
-          const elementInfo = msg.elementInfo as { tagName?: string; id?: string; className?: string; x?: number; y?: number } | undefined;
-          if (!instruction) return;
-
-          // Build coordinate-focused instruction so AI uses exact position
-          let enrichedInstruction = instruction;
-          if (elementInfo && elementInfo.x !== undefined && elementInfo.y !== undefined) {
-            // If element has a unique ID, mention it as primary selector
-            if (elementInfo.id) {
-              enrichedInstruction = `${instruction}\n\nTarget element: #${elementInfo.id} (${elementInfo.tagName || 'element'} at coordinates x=${elementInfo.x}, y=${elementInfo.y})`;
-            } else {
-              // No unique ID — emphasize coordinates as primary targeting method
-              enrichedInstruction = `${instruction}\n\nTarget: ${elementInfo.tagName || 'element'} at page coordinates x=${elementInfo.x}, y=${elementInfo.y}. ` +
-                `IMPORTANT: Use browser_evaluate to click at these exact coordinates if a unique selector is not available. ` +
-                `Example: document.elementFromPoint(${elementInfo.x}, ${elementInfo.y}).click()`;
-            }
-          }
-
-          // Fire this as a browser chat message
-          const requestId = `browser-instruct-${Date.now()}`;
-          const prompt = buildBrowserChatPrompt({
-            message: enrichedInstruction,
-            context: {
-              currentUrl: browserManager.hasActiveSession() ? await browserManager.getUrl().catch(() => '') : '',
-              currentTitle: browserManager.hasActiveSession() ? await browserManager.getTitle().catch(() => '') : '',
-              tabCount: browserManager.hasActiveSession() ? (await browserManager.listTabs().catch(() => [])).length : 0,
-            },
-            projectPath: options.projectPath,
-          });
-
-          // Broadcast that we're starting a new request from point & instruct
-          broadcast(wss, {
-            type: 'ai-fix-point-instruct',
-            requestId,
-            instruction: enrichedInstruction,
-          });
-
-          streamBrowserWithToolEvents(orchestrator, browserManager, wss, prompt, requestId, options.projectPath);
           return;
         }
 
@@ -439,6 +485,14 @@ async function streamBrowserWithToolEvents(
     // Auto-capture screenshot after key browser actions complete
     if (phase === 'complete' && screenshotTriggerTools.has(toolName) && browserManager.hasActiveSession()) {
       captureAndBroadcastScreenshot(browserManager, wss, requestId, projectPath).catch(() => {});
+    }
+
+    // Broadcast browser lifecycle events so LiveBrowserWrapper in any tab can detect them
+    if (phase === 'complete' && toolName === 'browser_launch') {
+      broadcast(wss, { type: 'browser-launched', url: (args.url as string) || '' });
+    }
+    if (phase === 'complete' && toolName === 'browser_close') {
+      broadcast(wss, { type: 'browser-closed' });
     }
   };
 

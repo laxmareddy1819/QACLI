@@ -5,15 +5,13 @@ import {
   Smartphone, Tablet, MonitorIcon, ChevronDown,
   PictureInPicture2, Crosshair,
   PanelBottom, PanelBottomClose,
-  Eye, Pause, Play,
+  Eye, Pause, Play, PowerOff,
 } from 'lucide-react';
 import type { WSMessage } from '../../api/types';
 import type { BrowserStatus } from './BrowserChat';
 import { getBrowserViewport } from '../../api/client';
 import { NetworkConsolePanel } from './NetworkConsolePanel';
 import { WatchModeOverlay } from './WatchModeOverlay';
-import { PointInstructMenu } from './PointInstructMenu';
-import { AssertionBuilder } from './AssertionBuilder';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -24,6 +22,8 @@ interface LiveBrowserViewProps {
   /** When true, this component renders as a floating PiP overlay */
   isPiP?: boolean;
   onTogglePiP?: () => void;
+  /** Called when user clicks the Close Browser button */
+  onCloseBrowser?: () => void;
 }
 
 interface FrameMetadata {
@@ -55,7 +55,7 @@ const VIEWPORT_PRESETS = [
 
 // ── LiveBrowserView Component ────────────────────────────────────────────────
 
-export function LiveBrowserView({ browserStatus, subscribe, send, isPiP, onTogglePiP }: LiveBrowserViewProps) {
+export function LiveBrowserView({ browserStatus, subscribe, send, isPiP, onTogglePiP, onCloseBrowser }: LiveBrowserViewProps) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [viewportSize, setViewportSize] = useState({ width: 1280, height: 720 });
@@ -66,6 +66,7 @@ export function LiveBrowserView({ browserStatus, subscribe, send, isPiP, onToggl
   // Phase 2 states
   const [highlightEnabled, setHighlightEnabled] = useState(false);
   const [currentHighlight, setCurrentHighlight] = useState<ElementHighlight | null>(null);
+  const [canvasCursor, setCanvasCursor] = useState('default');
   const [showPresets, setShowPresets] = useState(false);
   const [showDevPanel, setShowDevPanel] = useState(false);
   const [devPanelHeight, setDevPanelHeight] = useState(200);
@@ -74,9 +75,6 @@ export function LiveBrowserView({ browserStatus, subscribe, send, isPiP, onToggl
   const [watchModeEnabled, setWatchModeEnabled] = useState(true); // On by default
   const [aiPaused, setAiPaused] = useState(false);
   const [aiRunning, setAiRunning] = useState(false);
-  const [contextMenuPos, setContextMenuPos] = useState<{ display: { x: number; y: number }; viewport: { x: number; y: number } } | null>(null);
-  const [contextMenuElement, setContextMenuElement] = useState<ElementHighlight | null>(null);
-  const [assertionElement, setAssertionElement] = useState<ElementHighlight | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -197,6 +195,24 @@ export function LiveBrowserView({ browserStatus, subscribe, send, isPiP, onToggl
     // Phase 2: Element highlight response
     if (msg.type === 'screencast-highlight') {
       setCurrentHighlight(msg.highlight as ElementHighlight | null);
+      return;
+    }
+
+    // Tab switched — update URL bar
+    if (msg.type === 'browser-tab-switched') {
+      if (msg.url) setUrlInput(msg.url as string);
+      return;
+    }
+
+    // URL/title changed (page navigation detected by screencast service)
+    if (msg.type === 'screencast-url-changed') {
+      if (msg.url) setUrlInput(msg.url as string);
+      return;
+    }
+
+    // Cursor style from browser page — apply to canvas
+    if (msg.type === 'screencast-cursor') {
+      setCanvasCursor(msg.cursor as string || 'default');
       return;
     }
 
@@ -341,19 +357,21 @@ export function LiveBrowserView({ browserStatus, subscribe, send, isPiP, onToggl
   }, [controlMode, scaleCoordinates, send]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    // Phase 2: Element highlighting on hover (throttled to ~100ms)
-    if (highlightEnabled && controlMode === 'user') {
-      const now = Date.now();
-      if (now - hoverThrottleRef.current > 100) {
-        hoverThrottleRef.current = now;
-        const { x, y } = scaleCoordinates(e.clientX, e.clientY);
-        send({ type: 'screencast-hover', x, y });
-      }
+    if (controlMode !== 'user') return;
+
+    const now = Date.now();
+    // Throttle move events to ~50ms to avoid flooding CDP
+    if (now - hoverThrottleRef.current < 50) return;
+    hoverThrottleRef.current = now;
+
+    const { x, y } = scaleCoordinates(e.clientX, e.clientY);
+
+    // Phase 2: Element highlighting on hover
+    if (highlightEnabled) {
+      send({ type: 'screencast-hover', x, y });
     }
 
-    if (controlMode !== 'user') return;
-    if (e.buttons === 0) return;
-    const { x, y } = scaleCoordinates(e.clientX, e.clientY);
+    // Forward mouseMoved to browser so hover effects (tooltips, dropdowns, :hover CSS) work
     send({
       type: 'screencast-mouse',
       mouseType: 'mouseMoved',
@@ -371,26 +389,7 @@ export function LiveBrowserView({ browserStatus, subscribe, send, isPiP, onToggl
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    // Phase 3: Show Point & Instruct context menu on right-click
-    if (controlMode === 'user') {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const canvasRect = canvas.getBoundingClientRect();
-
-      // Position relative to the canvas element itself (the menu is inside the canvas's parent div)
-      const displayX = e.clientX - canvasRect.left;
-      const displayY = e.clientY - canvasRect.top;
-
-      // Viewport coordinates
-      const vpCoords = scaleCoordinates(e.clientX, e.clientY);
-
-      setContextMenuPos({
-        display: { x: displayX, y: displayY },
-        viewport: vpCoords,
-      });
-      setContextMenuElement(currentHighlight);
-    }
-  }, [controlMode, scaleCoordinates, currentHighlight]);
+  }, []);
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     if (controlMode !== 'user') return;
@@ -595,23 +594,37 @@ export function LiveBrowserView({ browserStatus, subscribe, send, isPiP, onToggl
           {onTogglePiP && (
             <button
               onClick={onTogglePiP}
-              className={`p-1 rounded transition-colors ${isPiP ? 'text-brand-400 bg-brand-500/15' : 'text-gray-500 hover:text-gray-400'}`}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${isPiP ? 'text-brand-400 bg-brand-500/15' : 'text-gray-500 hover:text-gray-400'}`}
               title={isPiP ? 'Exit Picture-in-Picture' : 'Picture-in-Picture'}
             >
-              <PictureInPicture2 size={11} />
+              <PictureInPicture2 size={11} /> PiP
             </button>
+          )}
+          {onCloseBrowser && (
+            <>
+              <div className="w-px h-3 bg-white/10" />
+              <button
+                onClick={onCloseBrowser}
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium text-red-400/70 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                title="Close browser session"
+              >
+                <PowerOff size={10} /> Close
+              </button>
+            </>
           )}
         </div>
       </div>
 
       {/* URL Bar + Viewport Presets */}
       <div className="flex items-center gap-1.5 px-2 py-1 border-b border-white/5 bg-surface-1 flex-shrink-0">
-        <button onClick={() => send({ type: 'screencast-key', keyType: 'keyDown', key: 'GoBack', code: 'GoBack' })}
-          className="p-1 rounded hover:bg-white/5 text-gray-500 hover:text-gray-400 transition-colors">
+        <button onClick={() => send({ type: 'screencast-go-back' })}
+          className="p-1 rounded hover:bg-white/5 text-gray-500 hover:text-gray-400 transition-colors"
+          title="Go back">
           <ArrowLeft size={12} />
         </button>
-        <button onClick={() => send({ type: 'screencast-key', keyType: 'keyDown', key: 'GoForward', code: 'GoForward' })}
-          className="p-1 rounded hover:bg-white/5 text-gray-500 hover:text-gray-400 transition-colors">
+        <button onClick={() => send({ type: 'screencast-go-forward' })}
+          className="p-1 rounded hover:bg-white/5 text-gray-500 hover:text-gray-400 transition-colors"
+          title="Go forward">
           <ArrowRight size={12} />
         </button>
         <button onClick={() => send({ type: 'screencast-navigate', url: browserStatus.url || '' })}
@@ -694,8 +707,8 @@ export function LiveBrowserView({ browserStatus, subscribe, send, isPiP, onToggl
           <div className="relative max-w-full max-h-full" style={{ aspectRatio: `${aspectRatio}` }}>
             <canvas
               ref={canvasRef}
-              className={`max-w-full max-h-full block ${controlMode === 'user' ? 'cursor-default' : 'cursor-not-allowed'}`}
-              style={{ aspectRatio: `${aspectRatio}` }}
+              className="max-w-full max-h-full block"
+              style={{ aspectRatio: `${aspectRatio}`, cursor: controlMode === 'user' ? canvasCursor : 'not-allowed' }}
               onMouseDown={handleMouseDown}
               onMouseUp={handleMouseUp}
               onMouseMove={handleMouseMove}
@@ -723,59 +736,6 @@ export function LiveBrowserView({ browserStatus, subscribe, send, isPiP, onToggl
                 viewportHeight={viewportSize.height}
                 enabled={watchModeEnabled}
               />
-            )}
-
-            {/* Phase 3: Point & Instruct context menu */}
-            {contextMenuPos && (
-              <PointInstructMenu
-                position={contextMenuPos.display}
-                viewportPosition={contextMenuPos.viewport}
-                elementInfo={contextMenuElement ? {
-                  tagName: contextMenuElement.tagName,
-                  id: contextMenuElement.id,
-                  className: contextMenuElement.className,
-                  x: contextMenuElement.x,
-                  y: contextMenuElement.y,
-                  width: contextMenuElement.width,
-                  height: contextMenuElement.height,
-                } : null}
-                send={send}
-                onClose={() => { setContextMenuPos(null); setContextMenuElement(null); }}
-                onAssertionMode={(el) => {
-                  if (el) setAssertionElement(el as ElementHighlight);
-                }}
-              />
-            )}
-
-            {/* Phase 3: Assertion builder popup */}
-            {assertionElement && (
-              <div className="absolute top-4 right-4 z-50">
-                <AssertionBuilder
-                  elementInfo={{
-                    tagName: assertionElement.tagName,
-                    id: assertionElement.id,
-                    className: assertionElement.className,
-                    x: assertionElement.x,
-                    y: assertionElement.y,
-                    width: assertionElement.width,
-                    height: assertionElement.height,
-                  }}
-                  onClose={() => setAssertionElement(null)}
-                  onSendToAI={(instruction) => {
-                    send({
-                      type: 'screencast-instruct',
-                      instruction,
-                      elementInfo: {
-                        tagName: assertionElement.tagName,
-                        id: assertionElement.id,
-                        className: assertionElement.className,
-                        x: assertionElement.x,
-                        y: assertionElement.y,
-                      },
-                    });
-                  }}
-                />
-              </div>
             )}
 
             {/* Phase 3: AI Paused indicator overlay — semi-transparent so browser is visible behind */}

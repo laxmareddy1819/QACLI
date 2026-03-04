@@ -124,20 +124,40 @@ export function BrowserChat({ subscribe, send, browserStatus, onBrowserStatusCha
       return;
     }
 
-    // Phase 3: Point & Instruct — AI triggered from canvas right-click
-    if (msg.type === 'ai-fix-point-instruct') {
-      const instruction = msg.instruction as string;
-      const reqId = msg.requestId as string;
-      streamTextRef.current = '';
-      streamTextIdRef.current = null;
-      textSegmentCounter.current = 0;
-      setTimeline(prev => [
-        ...prev,
-        { kind: 'user', id: `user-${reqId}`, text: instruction },
-        { kind: 'loading', id: `loading-${reqId}` },
-      ]);
-      setIsStreaming(true);
-      setCurrentRequestId(reqId);
+    // Browser closed notification (externally or via Close button)
+    if (msg.type === 'browser-closed') {
+      onBrowserStatusChange({ active: false });
+      return;
+    }
+
+    // Browser launched notification
+    if (msg.type === 'browser-launched') {
+      onBrowserStatusChange({
+        ...browserStatus,
+        active: true,
+        url: (msg.url as string) || browserStatus.url || '',
+      });
+      return;
+    }
+
+    // Tab switch notification — update browserStatus with new tabs/url/title
+    if (msg.type === 'browser-tab-switched') {
+      onBrowserStatusChange({
+        active: true,
+        url: (msg.url as string) || '',
+        title: (msg.title as string) || '',
+        tabs: (msg.tabs as Array<{ index: number; url: string; title: string; active: boolean }>) || [],
+      });
+      return;
+    }
+
+    // URL/title changed (screencast navigation detection)
+    if (msg.type === 'screencast-url-changed') {
+      onBrowserStatusChange({
+        ...browserStatus,
+        url: (msg.url as string) || browserStatus.url || '',
+        title: (msg.title as string) || browserStatus.title || '',
+      });
       return;
     }
 
@@ -397,10 +417,12 @@ export function BrowserChat({ subscribe, send, browserStatus, onBrowserStatusCha
             ) : (
               <>
                 <button onClick={handleScreenshot} disabled={isStreaming}
+                  title="Take browser screenshot"
                   className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-sky-400 bg-sky-500/10 border border-sky-500/20 hover:bg-sky-500/20 transition-colors disabled:opacity-30">
                   <Camera size={11} /> Screenshot
                 </button>
                 <button onClick={handleClose} disabled={isStreaming}
+                  title="Close browser session"
                   className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-red-400 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-colors disabled:opacity-30">
                   <PowerOff size={11} /> Close
                 </button>

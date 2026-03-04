@@ -11,6 +11,44 @@ import { createLogger } from '../../utils/index.js';
 
 const logger = createLogger('screencast');
 
+// ── Special key → virtual key code + text value mapping ─────────────────────
+// CDP's Input.dispatchKeyEvent requires windowsVirtualKeyCode for special keys
+// to work (Enter, Backspace, Tab, arrows, etc.) and text values for keys that
+// produce characters (e.g. "\r" for Enter, "\t" for Tab).
+const SPECIAL_KEY_MAP: Record<string, { keyCode: number; text?: string }> = {
+  Backspace: { keyCode: 8 },
+  Tab: { keyCode: 9, text: '\t' },
+  Enter: { keyCode: 13, text: '\r' },
+  Shift: { keyCode: 16 },
+  Control: { keyCode: 17 },
+  Alt: { keyCode: 18 },
+  Escape: { keyCode: 27 },
+  ' ': { keyCode: 32, text: ' ' },
+  PageUp: { keyCode: 33 },
+  PageDown: { keyCode: 34 },
+  End: { keyCode: 35 },
+  Home: { keyCode: 36 },
+  ArrowLeft: { keyCode: 37 },
+  ArrowUp: { keyCode: 38 },
+  ArrowRight: { keyCode: 39 },
+  ArrowDown: { keyCode: 40 },
+  Insert: { keyCode: 45 },
+  Delete: { keyCode: 46 },
+  Meta: { keyCode: 91 },
+  F1: { keyCode: 112 },
+  F2: { keyCode: 113 },
+  F3: { keyCode: 114 },
+  F4: { keyCode: 115 },
+  F5: { keyCode: 116 },
+  F6: { keyCode: 117 },
+  F7: { keyCode: 118 },
+  F8: { keyCode: 119 },
+  F9: { keyCode: 120 },
+  F10: { keyCode: 121 },
+  F11: { keyCode: 122 },
+  F12: { keyCode: 123 },
+};
+
 export interface ScreencastOptions {
   format?: 'jpeg' | 'png';
   quality?: number;
@@ -90,6 +128,11 @@ export class ScreencastService {
   private consoleEnabled = false;
   private pendingRequests = new Map<string, { url: string; method: string; timestamp: number }>();
 
+  // Navigation tracking — detect URL/title changes and broadcast to frontend
+  private navigationHandler: ((frame: any) => void) | null = null;
+  private lastBroadcastUrl = '';
+  private titleFetchTimer: ReturnType<typeof setTimeout> | null = null;
+
   /**
    * Start screencast on the given page. Uses CDP for Chromium, periodic screenshots otherwise.
    */
@@ -128,6 +171,9 @@ export class ScreencastService {
       this.startFallbackScreencast(page);
     }
 
+    // Set up navigation tracking to detect URL/title changes
+    this.setupNavigationTracking(page);
+
     this.isStreaming = true;
     logger.info(`Screencast started (${this.isCDP ? 'CDP' : 'fallback'}) — ${this.viewportWidth}x${this.viewportHeight}`);
   }
@@ -146,11 +192,38 @@ export class ScreencastService {
   }
 
   /**
+   * Force-stop the screencast by clearing all internal state immediately.
+   * Does NOT attempt to send CDP commands (browser is already dead/disconnected).
+   * Used when the browser is externally closed and CDP is unresponsive.
+   */
+  forceStop(): void {
+    this.removeNavigationTracking();
+
+    if (this.fallbackInterval) {
+      clearInterval(this.fallbackInterval);
+      this.fallbackInterval = null;
+    }
+
+    // Don't try to send CDP commands — just null out the session
+    this.networkEnabled = false;
+    this.consoleEnabled = false;
+    this.pendingRequests.clear();
+    this.cdpSession = null;
+    this.isStreaming = false;
+    this.activePage = null;
+    this.wss = null;
+    logger.info('Screencast force-stopped (browser disconnected)');
+  }
+
+  /**
    * Internal stop — cleans up all resources WITHOUT broadcasting 'stopped'.
    * Used by startScreencast (restart) and switchPage to avoid race conditions
    * where the frontend receives 'stopped' and tears down the canvas mid-restart.
    */
   private async internalStop(): Promise<void> {
+    // Remove navigation tracking first
+    this.removeNavigationTracking();
+
     if (this.fallbackInterval) {
       clearInterval(this.fallbackInterval);
       this.fallbackInterval = null;
@@ -215,6 +288,10 @@ export class ScreencastService {
 
   /**
    * Forward a keyboard event to the browser via CDP or Playwright.
+   *
+   * CDP's Input.dispatchKeyEvent needs windowsVirtualKeyCode for special keys
+   * (Enter, Backspace, Tab, Escape, arrows, etc.) and proper text values
+   * (e.g. "\r" for Enter, "\t" for Tab) to actually produce input in the page.
    */
   async forwardKeyEvent(params: KeyEventParams): Promise<void> {
     if (this.cdpSession) {
@@ -228,8 +305,21 @@ export class ScreencastService {
       } else {
         cdpParams.key = params.key;
         cdpParams.code = params.code || '';
-        if (params.type === 'keyDown' && params.text) {
+
+        // Map special keys to their virtual key codes + text values
+        const keyInfo = SPECIAL_KEY_MAP[params.key];
+        if (keyInfo) {
+          cdpParams.windowsVirtualKeyCode = keyInfo.keyCode;
+          cdpParams.nativeVirtualKeyCode = keyInfo.keyCode;
+          if (params.type === 'keyDown' && keyInfo.text) {
+            cdpParams.text = keyInfo.text;
+          }
+        } else if (params.type === 'keyDown' && params.text) {
           cdpParams.text = params.text;
+          // For printable characters, set the char code
+          if (params.text.length === 1) {
+            cdpParams.windowsVirtualKeyCode = params.text.toUpperCase().charCodeAt(0);
+          }
         }
       }
 
@@ -284,6 +374,22 @@ export class ScreencastService {
 
   getViewportSize(): { width: number; height: number } {
     return { width: this.viewportWidth, height: this.viewportHeight };
+  }
+
+  /**
+   * Get the CSS cursor style at a given page coordinate.
+   * Returns the computed cursor value (pointer, text, default, etc.)
+   */
+  async getCursorAtPoint(x: number, y: number): Promise<string | null> {
+    if (!this.activePage) return null;
+    try {
+      return await this.activePage.evaluate(`(() => {
+        const el = document.elementFromPoint(${Math.round(x)}, ${Math.round(y)});
+        return el ? getComputedStyle(el).cursor : 'default';
+      })()`);
+    } catch {
+      return null;
+    }
   }
 
   // ── Phase 2: Element Highlighting ─────────────────────────────────────────
@@ -577,6 +683,89 @@ export class ScreencastService {
     }
     this.consoleEnabled = false;
     logger.info('Console monitoring disabled');
+  }
+
+  // ── Page Navigation Tracking ────────────────────────────────────────────────
+
+  /**
+   * Listen for page navigations (URL changes, title changes) and broadcast
+   * updates to all connected clients so the URL bar and tab titles stay current.
+   */
+  private setupNavigationTracking(page: Page): void {
+    this.removeNavigationTracking(); // clean up any previous
+
+    this.lastBroadcastUrl = page.url();
+
+    // Broadcast initial URL/title
+    this.broadcastUrlChange(page);
+
+    // Listen for main frame navigations (URL changes)
+    this.navigationHandler = (frame: any) => {
+      // Only track main frame navigations (ignore iframe navigations)
+      try {
+        if (frame !== page.mainFrame()) return;
+      } catch {
+        return; // page may be closed
+      }
+
+      const newUrl = page.url();
+      if (newUrl !== this.lastBroadcastUrl) {
+        this.lastBroadcastUrl = newUrl;
+        this.broadcast({
+          type: 'screencast-url-changed',
+          url: newUrl,
+          title: '', // title not ready yet during navigation
+        });
+
+        // Title loads asynchronously after navigation — fetch after a short delay
+        if (this.titleFetchTimer) clearTimeout(this.titleFetchTimer);
+        this.titleFetchTimer = setTimeout(() => {
+          this.broadcastUrlChange(page);
+        }, 600);
+      }
+    };
+
+    page.on('framenavigated', this.navigationHandler);
+  }
+
+  /**
+   * Remove navigation event listeners from the active page.
+   */
+  private removeNavigationTracking(): void {
+    if (this.titleFetchTimer) {
+      clearTimeout(this.titleFetchTimer);
+      this.titleFetchTimer = null;
+    }
+
+    if (this.navigationHandler && this.activePage) {
+      try {
+        this.activePage.off('framenavigated', this.navigationHandler);
+      } catch { /* page may already be closed */ }
+    }
+    this.navigationHandler = null;
+    this.lastBroadcastUrl = '';
+  }
+
+  /**
+   * Broadcast current URL + title of the page.
+   */
+  private broadcastUrlChange(page: Page): void {
+    const url = page.url();
+    page.title().then((title) => {
+      this.lastBroadcastUrl = url;
+      this.broadcast({
+        type: 'screencast-url-changed',
+        url,
+        title,
+      });
+    }).catch(() => {
+      // Page may be closed or navigating — just broadcast URL
+      this.broadcast({
+        type: 'screencast-url-changed',
+        url,
+        title: '',
+      });
+    });
   }
 
   // ── CDP Screencast ──────────────────────────────────────────────────────────

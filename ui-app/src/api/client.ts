@@ -450,6 +450,11 @@ export const getBrowserScreenshot = () =>
 export const getBrowserViewport = () =>
   request<{ width: number; height: number; browserType?: string }>('/api/browser/viewport');
 
+export const closeBrowserSession = () =>
+  request<{ closed: boolean; message?: string; error?: string }>('/api/browser/close', {
+    method: 'POST',
+  });
+
 // Test Explorer
 export const getTestExplorer = () =>
   request<import('./types').ExplorerData>('/api/tests/explore');

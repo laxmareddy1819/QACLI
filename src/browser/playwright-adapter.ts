@@ -25,6 +25,20 @@ export class PlaywrightAdapter implements WebAdapter {
   private sessionId: string | null = null;
   private browserTypeName: string | null = null;
   private initialized = false;
+  private newPageCallback: ((index: number) => void) | null = null;
+  private disconnectCallback: (() => void) | null = null;
+  private disconnectNotified = false;
+  private disconnectPollInterval: ReturnType<typeof setInterval> | null = null;
+
+  /** Register callback for when a new tab/popup is auto-detected by the browser context. */
+  onNewPage(cb: (index: number) => void): void {
+    this.newPageCallback = cb;
+  }
+
+  /** Register callback for when the browser is externally disconnected (user closed the window). */
+  onDisconnect(cb: () => void): void {
+    this.disconnectCallback = cb;
+  }
 
   async initialize(): Promise<void> {
     this.initialized = true;
@@ -44,6 +58,15 @@ export class PlaywrightAdapter implements WebAdapter {
       slowMo: options?.slowMo,
     });
 
+    // Reset disconnect guard for new session
+    this.disconnectNotified = false;
+
+    // Detect when user closes the browser window externally
+    this.browser.on('disconnected', () => {
+      logger.info('Browser disconnected event fired');
+      this.handleDisconnect('event');
+    });
+
     this.context = await this.browser.newContext({
       viewport: options?.viewport || { width: 1280, height: 720 },
       locale: options?.locale,
@@ -57,6 +80,14 @@ export class PlaywrightAdapter implements WebAdapter {
     this.sessionId = generateId('session');
     this.browserTypeName = browserType;
 
+    // Attach close listener to the FIRST page (context.on('page') only catches later pages)
+    this.attachPageCloseListener(firstPage);
+
+    // Start a heartbeat that polls browser.isConnected() every 2 seconds.
+    // This is a fallback for platforms where browser.on('disconnected') may not fire
+    // reliably (e.g. Windows headed Chromium).
+    this.startDisconnectPoll();
+
     // Listen for new pages (popups, window.open, target=_blank)
     this.context.on('page', (newPage: Page) => {
       if (!this.pages.includes(newPage)) {
@@ -65,20 +96,13 @@ export class PlaywrightAdapter implements WebAdapter {
       const idx = this.pages.indexOf(newPage);
       logger.info(`New tab/popup detected (index ${idx}): ${newPage.url()}`);
 
+      // Notify BrowserManager about the new tab so screencast can switch
+      if (this.newPageCallback) {
+        try { this.newPageCallback(idx); } catch { /* ignore */ }
+      }
+
       // Clean up when the page is closed
-      newPage.on('close', () => {
-        const closeIdx = this.pages.indexOf(newPage);
-        if (closeIdx >= 0) {
-          this.pages.splice(closeIdx, 1);
-          // Adjust activePageIndex if needed
-          if (this.activePageIndex >= this.pages.length) {
-            this.activePageIndex = Math.max(0, this.pages.length - 1);
-          }
-          if (this.activePageIndex === closeIdx) {
-            this.activeFrame = null;
-          }
-        }
-      });
+      this.attachPageCloseListener(newPage);
     });
 
     if (options?.baseUrl) {
@@ -95,6 +119,8 @@ export class PlaywrightAdapter implements WebAdapter {
   }
 
   async closeSession(): Promise<void> {
+    this.stopDisconnectPoll();
+    this.disconnectNotified = true; // Prevent poll/event from firing during programmatic close
     if (this.browser) {
       await this.browser.close().catch(() => {});
       this.browser = null;
@@ -514,6 +540,11 @@ export class PlaywrightAdapter implements WebAdapter {
     return this.pages.length > 0 ? this.pages[this.activePageIndex] : null;
   }
 
+  /** Get the current active page index. */
+  getActivePageIndex(): number {
+    return this.activePageIndex;
+  }
+
   /**
    * Expose all tracked pages (for recorder multi-tab support).
    */
@@ -535,6 +566,100 @@ export class PlaywrightAdapter implements WebAdapter {
   async dispose(): Promise<void> {
     await this.closeSession();
     this.initialized = false;
+  }
+
+  // ── Disconnect Detection Helpers ────────────────────────────────────────────
+
+  /**
+   * Central disconnect handler with dedup guard.
+   * Called by: browser 'disconnected' event, heartbeat poll, last-page-close detection.
+   * Only executes ONCE per session thanks to `disconnectNotified` flag.
+   */
+  private handleDisconnect(source: string): void {
+    if (this.disconnectNotified) {
+      logger.info(`Disconnect already handled (ignoring duplicate from ${source})`);
+      return;
+    }
+    this.disconnectNotified = true;
+    this.stopDisconnectPoll();
+    logger.info(`Browser disconnect detected via ${source} — cleaning up`);
+
+    this.pages = [];
+    this.activePageIndex = 0;
+    this.activeFrame = null;
+    this.context = null;
+    this.browser = null;
+    this.sessionId = null;
+
+    if (this.disconnectCallback) {
+      try {
+        this.disconnectCallback();
+        logger.info('Disconnect callback executed successfully');
+      } catch (err) {
+        logger.info(`Disconnect callback error: ${err}`);
+      }
+    } else {
+      logger.info('No disconnect callback registered');
+    }
+  }
+
+  /**
+   * Attach a close listener to a page. When the last page closes,
+   * treat it as a browser disconnect (fallback for when browser.on('disconnected') is slow).
+   */
+  private attachPageCloseListener(page: Page): void {
+    page.on('close', () => {
+      const closeIdx = this.pages.indexOf(page);
+      if (closeIdx >= 0) {
+        this.pages.splice(closeIdx, 1);
+        // Adjust activePageIndex if needed
+        if (this.activePageIndex >= this.pages.length) {
+          this.activePageIndex = Math.max(0, this.pages.length - 1);
+        }
+        if (this.activePageIndex === closeIdx) {
+          this.activeFrame = null;
+        }
+      }
+
+      // If ALL pages are gone and this wasn't a programmatic close, the browser is effectively disconnected
+      if (this.pages.length === 0 && !this.disconnectNotified) {
+        logger.info('All pages closed — triggering disconnect via last-page-close');
+        // Small delay to let browser.on('disconnected') fire first if it's going to
+        setTimeout(() => {
+          this.handleDisconnect('last-page-close');
+        }, 500);
+      }
+    });
+  }
+
+  /**
+   * Start polling browser.isConnected() every 2 seconds.
+   * Catches disconnects that the event listener misses (Windows edge cases).
+   */
+  private startDisconnectPoll(): void {
+    this.stopDisconnectPoll();
+    this.disconnectPollInterval = setInterval(() => {
+      try {
+        if (!this.browser || !this.browser.isConnected()) {
+          logger.info('Heartbeat detected browser disconnected');
+          this.handleDisconnect('heartbeat-poll');
+        }
+      } catch {
+        // browser object might be in a bad state
+        logger.info('Heartbeat error — treating as disconnect');
+        this.handleDisconnect('heartbeat-poll-error');
+      }
+    }, 2000);
+  }
+
+  /**
+   * Stop the disconnect heartbeat poll.
+   */
+  private stopDisconnectPoll(): void {
+    if (this.disconnectPollInterval) {
+      clearInterval(this.disconnectPollInterval);
+      this.disconnectPollInterval = null;
+    }
   }
 
   // ── Internal Helpers ──────────────────────────────────────────────────────

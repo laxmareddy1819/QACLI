@@ -410,6 +410,14 @@ export async function streamScopedWithToolEvents(
       result: phase === 'complete' ? truncateResult(result) : undefined,
       error: phase === 'error' ? (error?.message || String(error)) : undefined,
     });
+
+    // Broadcast browser lifecycle events so LiveBrowserWrapper can detect them
+    if (phase === 'complete' && toolName === 'browser_launch') {
+      broadcast(wss, { type: 'browser-launched', url: (args.url as string) || '' });
+    }
+    if (phase === 'complete' && toolName === 'browser_close') {
+      broadcast(wss, { type: 'browser-closed' });
+    }
   };
 
   // Install UI callbacks

@@ -2,14 +2,21 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { X, Maximize2, Minimize2, GripHorizontal, MonitorX } from 'lucide-react';
 import type { WSMessage } from '../../api/types';
-import { BrowserChat } from './BrowserChat';
 import { LiveBrowserView } from './LiveBrowserView';
 import type { BrowserStatus } from './BrowserChat';
-import { closeBrowserSession } from '../../api/client';
+import { getBrowserStatus, closeBrowserSession } from '../../api/client';
 
-// ── BrowserPanel — Split Panel Container with PiP Support ────────────────────
+// ── LiveBrowserWrapper — Adds split-panel Live Browser View to any tab ───────
+//
+// Wraps any child content with browser-aware split panel + PiP support.
+// When a browser session is active, the panel splits to show LiveBrowserView
+// on the right side. When no browser is active, children fill the full width.
 
-export function BrowserPanel() {
+interface LiveBrowserWrapperProps {
+  children: React.ReactNode;
+}
+
+export function LiveBrowserWrapper({ children }: LiveBrowserWrapperProps) {
   const { subscribe, send } = useOutletContext<{
     subscribe: (handler: (msg: WSMessage) => void) => () => void;
     send: (msg: object) => void;
@@ -25,6 +32,149 @@ export function BrowserPanel() {
   const isResizing = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const closedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Check browser status on mount ──────────────────────────────────────────
+
+  useEffect(() => {
+    getBrowserStatus()
+      .then((status) => {
+        if (status.active) {
+          setBrowserStatus({
+            active: true,
+            url: status.url || '',
+            title: status.title || '',
+            tabs: status.tabs || [],
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // ── Helper: fetch full browser status (tabs, URL, title) from API ────────
+
+  const refreshFullStatus = useCallback((delay = 0) => {
+    const doFetch = () => {
+      getBrowserStatus()
+        .then((status) => {
+          if (status.active) {
+            setBrowserStatus({
+              active: true,
+              url: status.url || '',
+              title: status.title || '',
+              tabs: status.tabs || [],
+            });
+          }
+        })
+        .catch(() => {});
+    };
+    if (delay > 0) {
+      setTimeout(doFetch, delay);
+    } else {
+      doFetch();
+    }
+  }, []);
+
+  // ── Listen for browser status changes via WebSocket ────────────────────────
+
+  useEffect(() => {
+    const unsub = subscribe((msg: WSMessage) => {
+      if (msg.type === 'browser-launched') {
+        // Show immediately, then fetch full status (tabs, URL) from API
+        setBrowserStatus(prev => ({
+          ...prev,
+          active: true,
+          url: (msg.url as string) || prev.url || '',
+        }));
+        refreshFullStatus(300);
+        return;
+      }
+
+      if (msg.type === 'browser-closed') {
+        setBrowserStatus({ active: false });
+        // Show notification that browser session was closed
+        setClosedNotification(true);
+        if (closedTimerRef.current) clearTimeout(closedTimerRef.current);
+        closedTimerRef.current = setTimeout(() => setClosedNotification(false), 4000);
+        return;
+      }
+
+      if (msg.type === 'browser-tab-switched') {
+        setBrowserStatus(prev => ({
+          ...prev,
+          active: true,
+          url: (msg.url as string) || prev.url || '',
+          title: (msg.title as string) || prev.title || '',
+          tabs: (msg.tabs as BrowserStatus['tabs']) || prev.tabs || [],
+        }));
+        return;
+      }
+
+      // URL/title changed (screencast navigation detection)
+      if (msg.type === 'screencast-url-changed') {
+        setBrowserStatus(prev => ({
+          ...prev,
+          url: (msg.url as string) || prev.url || '',
+          title: (msg.title as string) || prev.title || '',
+        }));
+        return;
+      }
+
+      // Also listen for browser action messages that include URL updates
+      if (msg.type === 'ai-fix-browser-action') {
+        setBrowserStatus(prev => ({
+          ...prev,
+          active: true,
+          url: (msg.url as string) || prev.url || '',
+          title: (msg.title as string) || prev.title || '',
+        }));
+        return;
+      }
+
+      // Listen for screenshots that carry URL info (covers navigate, click, etc.)
+      if (msg.type === 'ai-fix-screenshot') {
+        if (msg.url) {
+          setBrowserStatus(prev => ({
+            ...prev,
+            url: (msg.url as string) || prev.url || '',
+            title: (msg.title as string) || prev.title || '',
+          }));
+        }
+        return;
+      }
+
+      // Detect recorder starting (which launches a browser)
+      if (msg.type === 'recorder-status' && msg.status === 'recording') {
+        setBrowserStatus(prev => ({
+          ...prev,
+          active: true,
+          url: (msg.url as string) || prev.url || '',
+        }));
+        // Fetch full status with tabs after a short delay for browser to be ready
+        refreshFullStatus(500);
+        return;
+      }
+
+      // Detect recorder reset/stop that might close browser
+      if (msg.type === 'recorder-status' && msg.status === 'reset') {
+        refreshFullStatus(200);
+        return;
+      }
+
+      // Fallback: detect browser_launch/browser_close tool completion via ai-fix-tool
+      if (msg.type === 'ai-fix-tool' && msg.phase === 'complete') {
+        if (msg.toolName === 'browser_launch') {
+          setBrowserStatus(prev => ({ ...prev, active: true }));
+          refreshFullStatus(300);
+          return;
+        }
+        if (msg.toolName === 'browser_close') {
+          setBrowserStatus({ active: false });
+          return;
+        }
+      }
+    });
+    return unsub;
+  }, [subscribe, refreshFullStatus]);
 
   // ── Split panel resize ─────────────────────────────────────────────────────
 
@@ -77,21 +227,13 @@ export function BrowserPanel() {
     }
   }, [send]);
 
-  // ── Listen for browser-closed to show notification ───────────────────────
+  // ── Clean up notification timer ──────────────────────────────────────────
 
   useEffect(() => {
-    const unsub = subscribe((msg: WSMessage) => {
-      if (msg.type === 'browser-closed') {
-        setClosedNotification(true);
-        if (closedTimerRef.current) clearTimeout(closedTimerRef.current);
-        closedTimerRef.current = setTimeout(() => setClosedNotification(false), 4000);
-      }
-    });
     return () => {
-      unsub();
       if (closedTimerRef.current) clearTimeout(closedTimerRef.current);
     };
-  }, [subscribe]);
+  }, []);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -100,18 +242,12 @@ export function BrowserPanel() {
 
   return (
     <div ref={containerRef} className="flex h-full overflow-hidden relative">
-      {/* Left: Chat / Timeline */}
+      {/* Left: Original panel content */}
       <div
         className="flex-shrink-0 overflow-hidden"
         style={{ width: showInlineLiveView ? `${100 - splitPercent}%` : '100%' }}
       >
-        <BrowserChat
-          subscribe={subscribe}
-          send={send}
-          browserStatus={browserStatus}
-          onBrowserStatusChange={setBrowserStatus}
-          hasLiveView={showInlineLiveView}
-        />
+        {children}
       </div>
 
       {/* Resize Handle (inline mode) */}
@@ -242,14 +378,13 @@ function PiPOverlay({ browserStatus, subscribe, send, size, onSizeChange, pos, o
 
         if (container) {
           const cRect = container.getBoundingClientRect();
-          // Keep at least 60px visible on every edge
           const minVisible = 60;
           const clampedX = Math.min(
             Math.max(-size.w + minVisible, rawX),
             cRect.width - minVisible,
           );
           const clampedY = Math.min(
-            Math.max(0, rawY), // don't allow hiding the title bar above
+            Math.max(0, rawY),
             cRect.height - minVisible,
           );
           onPosChange({ x: clampedX, y: clampedY });
