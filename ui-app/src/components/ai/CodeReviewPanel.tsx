@@ -4,7 +4,7 @@ import { aiCodeReview, aiApplyReviewFixes } from '../../api/client';
 import {
   ClipboardCheck, ChevronDown, ChevronRight, Globe, FolderSearch,
   CheckCircle2, XCircle, RotateCcw, AlertTriangle, Shield, Zap,
-  Code2, Bug, Layers, Gauge, Eye, Wrench, Rocket, Play,
+  Code2, Bug, Layers, Gauge, Eye, Wrench, Rocket, Play, Pause,
 } from 'lucide-react';
 import type { WSMessage } from '../../api/types';
 import {
@@ -223,12 +223,19 @@ export function CodeReviewPanel() {
   });
   const [applyDiffs, setApplyDiffs] = useState<FileDiff[]>([]);
 
+  // AI pause state
+  const [aiPaused, setAiPaused] = useState(false);
+
   const panelRef = useRef<HTMLDivElement>(null);
   const applyPanelRef = useRef<HTMLDivElement>(null);
 
   // ── WebSocket message handler ──────────────────────────────────────────────
 
   const handleMessage = useCallback((msg: WSMessage) => {
+    // Handle AI pause/resume status (no requestId filter needed)
+    if (msg.type === 'ai-orchestrator-paused') { setAiPaused(true); return; }
+    if (msg.type === 'ai-orchestrator-resumed') { setAiPaused(false); return; }
+
     const msgRequestId = msg.requestId as string | undefined;
     if (!msgRequestId) return;
 
@@ -307,10 +314,12 @@ export function CodeReviewPanel() {
       }
 
       if (msg.type === 'ai-fix-done') {
+        setAiPaused(false);
         return { ...prev, status: 'done' as const, statusMessage: undefined, pendingPermission: null };
       }
 
       if (msg.type === 'ai-fix-error') {
+        setAiPaused(false);
         return { ...prev, status: 'error' as const, error: msg.message as string, pendingPermission: null };
       }
 
@@ -752,6 +761,22 @@ export function CodeReviewPanel() {
             </div>
 
             <div className="flex items-center gap-1">
+              {isStreaming && !aiPaused && (
+                <button
+                  onClick={() => send({ type: 'screencast-pause' })}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold text-white bg-orange-600 border border-orange-400/40 hover:bg-orange-500 transition-colors shadow-sm"
+                >
+                  <Pause size={10} /> Pause AI
+                </button>
+              )}
+              {isStreaming && aiPaused && (
+                <button
+                  onClick={() => send({ type: 'screencast-resume' })}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold text-white bg-emerald-600 border border-emerald-400/40 hover:bg-emerald-500 transition-colors shadow-sm animate-pulse"
+                >
+                  <Play size={10} /> Resume AI
+                </button>
+              )}
               {(isDone || isError) && (
                 <>
                   <button
@@ -965,6 +990,22 @@ export function CodeReviewPanel() {
                   {isApplyError && <span className="text-xs text-red-400">Error</span>}
                 </div>
                 <div className="flex items-center gap-1">
+                  {isApplyStreaming && !aiPaused && (
+                    <button
+                      onClick={() => send({ type: 'screencast-pause' })}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold text-white bg-orange-600 border border-orange-400/40 hover:bg-orange-500 transition-colors shadow-sm"
+                    >
+                      <Pause size={10} /> Pause AI
+                    </button>
+                  )}
+                  {isApplyStreaming && aiPaused && (
+                    <button
+                      onClick={() => send({ type: 'screencast-resume' })}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold text-white bg-emerald-600 border border-emerald-400/40 hover:bg-emerald-500 transition-colors shadow-sm animate-pulse"
+                    >
+                      <Play size={10} /> Resume AI
+                    </button>
+                  )}
                   {(isApplyDone || isApplyError) && (
                     <button onClick={handleRetryFix}
                       className="flex items-center gap-1 px-2 py-1 rounded bg-surface-2 hover:bg-surface-3 text-xs text-gray-400 transition-colors">

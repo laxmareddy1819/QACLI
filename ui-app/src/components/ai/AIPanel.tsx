@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { Sparkles, Send, FlaskConical, Wrench, BookOpen, MessageSquare, Plus, ClipboardCheck, Globe, Circle, Lock } from 'lucide-react';
+import { Sparkles, Send, FlaskConical, Wrench, BookOpen, MessageSquare, Plus, ClipboardCheck, Globe, Circle, Lock, Pause, Play } from 'lucide-react';
 import { GenerateForm } from './GenerateForm';
 import { FixPanel } from './FixPanel';
 import { ChatPanel } from './ChatPanel';
@@ -27,13 +27,15 @@ const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
 const BROWSER_ENABLED_TABS = new Set<Tab>(['new-test', 'browser', 'record', 'chat']);
 
 export function AIPanel() {
-  const { subscribe } = useOutletContext<{
+  const { subscribe, send } = useOutletContext<{
     subscribe: (handler: (msg: WSMessage) => void) => () => void;
     send: (msg: object) => void;
   }>();
 
   const [tab, setTab] = useState<Tab>('new-test');
   const [browserActive, setBrowserActive] = useState(false);
+  const [aiRunning, setAiRunning] = useState(false);
+  const [aiPaused, setAiPaused] = useState(false);
 
   // ── Track browser status for tab locking ────────────────────────────────────
 
@@ -46,6 +48,26 @@ export function AIPanel() {
 
   useEffect(() => {
     const unsub = subscribe((msg: WSMessage) => {
+      // ── AI orchestrator running/paused state (global) ──
+      if (msg.type === 'ai-orchestrator-paused') {
+        setAiPaused(true);
+        return;
+      }
+      if (msg.type === 'ai-orchestrator-resumed') {
+        setAiPaused(false);
+        return;
+      }
+      // Detect AI streaming start from tool events or stream chunks
+      if (msg.type === 'ai-fix-stream' || (msg.type === 'ai-fix-tool' && msg.phase === 'start')) {
+        setAiRunning(true);
+      }
+      // Detect AI streaming end
+      if (msg.type === 'ai-fix-done' || msg.type === 'ai-fix-error') {
+        setAiRunning(false);
+        setAiPaused(false);
+      }
+
+      // ── Browser status tracking ──
       if (msg.type === 'browser-launched') {
         setBrowserActive(true);
         return;
@@ -119,6 +141,27 @@ export function AIPanel() {
             </button>
           );
         })}
+
+        {/* Global Pause/Resume AI — visible in tab bar whenever AI is running */}
+        {aiRunning && (
+          <div className="ml-auto flex items-center">
+            {!aiPaused ? (
+              <button
+                onClick={() => send({ type: 'screencast-pause' })}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white bg-orange-600 border border-orange-400/40 hover:bg-orange-500 transition-colors shadow-sm"
+              >
+                <Pause size={12} /> Pause AI
+              </button>
+            ) : (
+              <button
+                onClick={() => send({ type: 'screencast-resume' })}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white bg-emerald-600 border border-emerald-400/40 hover:bg-emerald-500 transition-colors shadow-sm animate-pulse"
+              >
+                <Play size={12} /> Resume AI
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Tab content */}

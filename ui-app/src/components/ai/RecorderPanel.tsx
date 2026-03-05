@@ -121,6 +121,9 @@ export function RecorderPanel() {
   // Assert mode
   const [assertActive, setAssertActive] = useState(false);
 
+  // AI pause state (for code generation)
+  const [aiPaused, setAiPaused] = useState(false);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const msgCounter = useRef(0);
   const uid = () => `rec-${++msgCounter.current}`;
@@ -183,6 +186,10 @@ export function RecorderPanel() {
   // ── WebSocket message handler ────────────────────────────────────────────
   useEffect(() => {
     const unsub = subscribe((msg: WSMessage) => {
+      // AI pause/resume status (for code generation phase)
+      if (msg.type === 'ai-orchestrator-paused') { setAiPaused(true); return; }
+      if (msg.type === 'ai-orchestrator-resumed') { setAiPaused(false); return; }
+
       // Live recorded action
       if (msg.type === 'recorder-action') {
         const action = msg.action as any;
@@ -420,6 +427,7 @@ export function RecorderPanel() {
         flushStreamText();
         setPhase('done');
         setGenLoading(false);
+        setAiPaused(false);
       } else if (msg.type === 'ai-fix-error') {
         flushStreamText();
         setTimeline(prev => [...prev, {
@@ -428,6 +436,7 @@ export function RecorderPanel() {
           text: (msg as any).message || 'Unknown error',
         }]);
         setGenLoading(false);
+        setAiPaused(false);
       }
     });
     return unsub;
@@ -1018,6 +1027,30 @@ export function RecorderPanel() {
               )}
               Generate Test Code
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Pause/Resume AI during code generation */}
+      {phase === 'generating' && (
+        <div className="flex-shrink-0 px-4 py-2 border-t border-white/5 bg-surface-1">
+          <div className="flex gap-2">
+            {!aiPaused && (
+              <button
+                onClick={() => send({ type: 'screencast-pause' })}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold text-white bg-orange-600 border border-orange-400/40 hover:bg-orange-500 transition-colors shadow-sm"
+              >
+                <Pause size={10} /> Pause AI
+              </button>
+            )}
+            {aiPaused && (
+              <button
+                onClick={() => send({ type: 'screencast-resume' })}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold text-white bg-emerald-600 border border-emerald-400/40 hover:bg-emerald-500 transition-colors shadow-sm animate-pulse"
+              >
+                <Play size={10} /> Resume AI
+              </button>
+            )}
           </div>
         </div>
       )}
